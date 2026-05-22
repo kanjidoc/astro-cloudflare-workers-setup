@@ -1,0 +1,67 @@
+# CLAUDE.md
+
+Guidance for Claude Code (claude.ai/code) when working in this repository.
+
+> Fill every `<placeholder>` with the project's real value. Leave no placeholders.
+
+## Project at a glance
+
+A static site — **<name / purpose / type>** — built with **Astro** and deployed to **Cloudflare Workers** via the **`@astrojs/cloudflare`** adapter (Workers Static Assets, *not* Cloudflare Pages). Static by default, with the SSR adapter installed so individual pages can become dynamic later.
+
+Live at **https://<canonical-domain>**. Auto-deploys from GitHub on every push to `main` (Cloudflare Workers Builds).
+
+## Commands
+
+| Command | Purpose |
+| :--- | :--- |
+| `npm run dev` | Astro dev server with HMR at `localhost:4321`. Use this for development — not `wrangler dev`. |
+| `npm run check` | `astro check` type-check. Run before every deploy. |
+| `npm run build` | Production build → `dist/client/` (static assets) + `dist/server/` (worker). |
+| `npm run deploy` | Manual deploy from a laptop. **Pushing to `main` is the primary deploy path**; this is the fallback. |
+| `npm run generate-types` | Regenerate `worker-configuration.d.ts`. **Run after any `wrangler.jsonc` change.** |
+
+## Architecture
+
+- **The adapter owns the deploy config.** Edit only the root `wrangler.jsonc`. At build time the adapter generates `dist/server/wrangler.json` and `.wrangler/deploy/config.json` (a pointer `wrangler deploy` follows). Never hand-edit the generated files.
+- **`output: 'static'` + the Cloudflare adapter** — pages prerender by default; opt one into SSR with `export const prerender = false`.
+- **`imageService: 'compile'`** — `<Image>` from `astro:assets` works fine; transforms are baked into content-hashed files at build time. Never use `passthrough` / `cloudflare-binding` (they emit runtime `/_image?` URLs that 404 on a static deploy).
+- **Custom 404** — `src/pages/404.astro` builds to `dist/client/404.html`; served because `wrangler.jsonc` sets `assets.not_found_handling: "404-page"`.
+- **CSP** — `security: { csp: true }` in `astro.config.mjs`; delivered as a `<meta>` tag. Inactive in `astro dev` — test with `build` + `preview`.
+- **Fonts** — Astro's built-in Fonts API (`fonts:` config + `<Font />` from `astro:assets`). Do not add `@fontsource`.
+- **JSON-LD** — exported as `jsonLd` from `src/data/site.ts`, injected in `Layout.astro`.
+- **The SESSION KV binding** — auto-wired by the adapter; its namespace ID lives in `wrangler.jsonc`. Inert until sessions are used.
+- **TypeScript** — `worker-configuration.d.ts` is committed; regenerate after any `wrangler.jsonc` change.
+
+## Conventions
+
+- Every page uses `src/layouts/Layout.astro`.
+- **Reusable UI → `src/components/`** (Astro's standard). **Content model:** fixed data (site info, links) lives in typed `as const` modules under `src/data/`; collection content (blog posts, projects) lives in **Astro Content Collections** (`src/content.config.ts`). Editing content means editing a data module or a collection entry — never page markup.
+- The site ships with **no opinionated styling** — no baked-in colors, fonts, or layout. `src/styles/global.css` (imported by `Layout.astro`) holds only the universal reset (`box-sizing`, responsive images) and is the home for site-wide CSS; scoped `<style>` blocks for component styles. Styling is a deliberate decision, not inherited.
+- Semantic HTML — `<header>`, `<main>`, `<nav>`, `<footer>`, `<article>`, `<section>` over `<div>`. `<main>` and `<footer>` are siblings, never nested.
+- WCAG 2.1 AA — visible `:focus-visible` rings, text contrast ≥ 4.5:1, the LCP image is never `loading="lazy"`.
+
+## Workflow
+
+- **After editing `wrangler.jsonc`** — run `npm run generate-types`.
+- **Before claiming a deploy-ready state** — `npm run check`, `npm run build`, and `npx wrangler deploy --dry-run` must all be clean.
+- **CI/CD** — Cloudflare Workers Builds (push to `main` → deploy in ~30s; other branches get preview URLs). Not GitHub Actions.
+- **Custom domains** — declared in `wrangler.jsonc` `routes` with `workers_dev: true`. A code 100117 DNS conflict needs manual record deletion in the Cloudflare dashboard.
+- **Browser/auth steps** — `wrangler login` and dashboard configuration must be done by the human.
+
+## Knowledge & memory policy
+
+Record project decisions, context, and direction **in this repository** — `CLAUDE.md` (architecture & conventions), `CHANGELOG.md` (what changed), `ROADMAP.md` (what's planned). **Do not save this project's facts to personal Claude memory.** Repo files are visible to the whole team and to every future session; personal memory is not. When you learn something worth keeping, update the relevant file here.
+
+## Accounts & domain
+
+- **GitHub repository:** <github-repo-URL> — auto-deploys to Cloudflare on every push to `main`.
+- **Cloudflare account:** hosts the Worker, the custom domain, and Web Analytics.
+- **Domain:** <canonical-domain> — registrar: <Cloudflare Registrar / external>.
+- **Credentials:** all access is OAuth (`wrangler login`, the Workers Builds GitHub App, Cloudflare MCP) — no long-lived API token is stored in this repo. Any token ever created belongs in a gitignored `.env`; account passwords belong in a password manager.
+
+## Reference
+
+- `CHANGELOG.md` — release history. `ROADMAP.md` — direction and planned work.
+- `.mcp.json` adds the Cloudflare Documentation MCP so Claude can verify current Cloudflare behavior.
+- Setup skill: `~/.claude/skills/astro-cloudflare-workers-setup/SKILL.md` — the full canonical guide.
+- Adapter docs: https://docs.astro.build/en/guides/integrations-guide/cloudflare/
