@@ -1,13 +1,15 @@
 ---
 name: astro-cloudflare-workers-setup
-description: Use when building a new static site with Astro deployed to Cloudflare Workers — portfolio, blog, business landing, docs, or any greenfield static site — covering project-folder setup, first deploy, custom domain, GitHub-connected auto-deploy CI/CD, SEO, accessibility, and maintenance. Triggers include "set up Astro + Cloudflare", "new Astro site on Cloudflare Workers", "static site with Astro", "deploy Astro to Cloudflare", or any greenfield static-site request naming both technologies even casually.
+description: Builds a static Astro site and ships it on Cloudflare Workers, from an empty folder to a live, auto-deploying site — scaffold, first deploy, custom domain, GitHub-connected Workers Builds, SEO, security headers, accessibility, analytics, and maintenance. Use when building a new static site with Astro on Cloudflare Workers (portfolio, blog, business landing, docs, coming-soon page), when resuming or productionizing such a site, or when the user says "set up Astro + Cloudflare", "new Astro site on Cloudflare Workers", "static site with Astro", "deploy Astro to Cloudflare", or names both technologies even casually.
 ---
 
 # Astro Static Site → Cloudflare Workers
 
+Skill directory: `${CLAUDE_SKILL_DIR}` — every `scripts/`, `references/`, `assets/` path (and `<skill-dir>` in reference files) is relative to it.
+
 The canonical, by-the-book path for **any static site built with Astro and deployed to Cloudflare Workers** — portfolio, blog, business landing, docs, event page, or a stealth/coming-soon page. Follow the steps in order.
 
-> **Authored May 2026**, verified against Astro 6.3, `@astrojs/cloudflare` 13.5, `wrangler` 4.93, Node 22. Scaffolding uses `@latest`, so installs are always current — see *Staying current*.
+> Verified baseline and sources: see *Versions & sources*. Scaffolding uses `@latest`, so installs are always current — see *Staying current*.
 
 **Platform:** this skill's commands target **macOS and Linux**. On Windows, run it inside **WSL2** (a plain Windows shell will fail on `mkdir -p`, `rm -rf`, `~`, `file`, etc.).
 
@@ -15,9 +17,9 @@ The canonical, by-the-book path for **any static site built with Astro and deplo
 
 When this skill is invoked, **Claude opens by orienting the user** — in the chat, in plain language — before running any command:
 
-1. **What this builds:** "I'll build you a real website with Astro and put it online with Cloudflare — fast, served worldwide, and free to host. Once it's set up, every time you save a change it republishes itself in about 30 seconds. You can connect your own domain name too." (Save the jargon — "edge", "CI/CD", "SSR" — for if the user asks.)
+1. **What this builds:** "I'll build you a real website with Astro and put it online with Cloudflare — fast, served worldwide, and free to host. Once it's set up, whenever you publish a change (I'll handle the `git push`), it goes live on its own within a couple of minutes. You can connect your own domain name too." (Save the jargon — "edge", "CI/CD", "SSR" — for if the user asks.)
 2. **Four phases get you to a live site (A–D), then there's optional ongoing maintenance.** The user can stop between phases and resume later.
-3. **The user will do a few things personally.** Claude runs every command and edits every file. But Claude cannot click in a browser — so at a handful of points (a login, the Cloudflare dashboard, optionally buying a domain) **Claude will stop, say exactly what to click, and wait for the user**. Tell the user this up front so the first hand-off isn't a surprise.
+3. **The user will do a few things personally.** Claude runs every command and edits every file. But Claude cannot click in a browser — so at a handful of points (possibly a login, the Cloudflare dashboard, optionally buying a domain) **Claude will stop, say exactly what to click, and wait for the user**. Tell the user this up front so the first hand-off isn't a surprise.
 4. **What it needs:** a GitHub account and a Cloudflare account (both free); a custom domain is optional and costs money (≈ $10/yr).
 5. **Progress is tracked:** Claude keeps a checklist (one item per step) so the user can see what's done and what's left.
 
@@ -30,11 +32,11 @@ When this skill is invoked, **Claude opens by orienting the user** — in the ch
 
 **Keep the user informed:** announce each phase in one sentence before it starts and confirm it in one line when it ends. **Placeholders** like `<repo-name>` are for Claude to fill with real values — never write a literal `<placeholder>` into a file. **For an experienced user** who supplies several answers at once or says "just go," batch the remaining *Confirm Inputs* questions into one message instead of asking serially.
 
-The skill is **finished** when Phases A–D are done and `verify_site.py` passes — see *Completion*. Phase E is ongoing maintenance, not part of the finish line.
+The skill is **finished** when Phases A–D are done and `verify_site.py` passes against the live site — see *Completion*. Phase E is ongoing maintenance, not part of the finish line.
 
 ## Staying current
 
-Setup commands scaffold with `@latest`, so installed code is current; the config shapes below are canonical as of the authored date. **Step 4 checks the installed Astro/adapter/wrangler majors against what this skill expects** — if a major has moved, verify the affected steps against current docs (via the Cloudflare Documentation MCP and Context7) and tell the user what changed. When a step says "as of writing," treat it as a checkpoint to confirm.
+Setup scaffolds with `@latest`, so installed code is current; the config shapes below match the *Verified baseline* (Versions & sources). **Step 4 checks the installed Astro/adapter/wrangler majors against it** — if a major has moved, verify the affected steps against current docs and tell the user what changed. For current behavior: Astro → the `astro-docs` MCP (`search_astro_docs`) first, then Context7; Cloudflare → the `cloudflare-docs` MCP, or fetch any page as Markdown at `https://developers.cloudflare.com/<path>/index.md` (use `/workers/llms.txt` only to find pages).
 
 ## When to use
 
@@ -44,14 +46,14 @@ A greenfield static site that should be fast, edge-hosted, and auto-deployed fro
 
 | Phase | Goal |
 |---|---|
-| **A — Foundation** (Steps 1–9) | Project folder → `npm run build` clean → `wrangler deploy --dry-run` clean. |
-| **B — First Deploy** (Step 10) | Live on `*.workers.dev`. Needs the user's `wrangler login`. |
+| **A — Foundation** (Steps 1–9) | Project folder → `npm run verify` clean (type check, build, `wrangler deploy --dry-run`). |
+| **B — First Deploy** (Step 10) | Live on `*.workers.dev`. Needs a Cloudflare login unless wrangler is already authenticated. |
 | **C — Productionization** (Steps 11–16) | Custom domain, GitHub auto-deploy, content, SEO, fonts, headers, accessibility, analytics. |
-| **D — Project setup for Claude Code** (Step 17) | `README.md`, `CLAUDE.md`, `.claude/`, `.mcp.json`, `CHANGELOG.md`, `ROADMAP.md`. |
+| **D — Project setup for Claude Code** (Step 17) | `README.md`, `CLAUDE.md`, `CHANGELOG.md`, `ROADMAP.md`. |
 | **✅ Completion** | Final verification + handoff summary. **The skill ends here.** |
 | **E — Maintenance** (Step 18) | Dependency updates, compatibility bumps, monitoring — ongoing, after completion. |
 
-**Resuming mid-flow** — detect the incomplete step from concrete repo artifacts and resume there; don't redo prior steps. Tell the user what you detected and where you're picking up, and get a one-word confirm. Detection map: no `package.json` → Step 0/1 · `package.json` but no `@astrojs/cloudflare` → Step 3 · no `worker-configuration.d.ts` → Step 6 · no `src/pages/404.astro` → Step 13 · `wrangler.jsonc` has no `kv_namespaces` → Step 10 not done · no `routes` in `wrangler.jsonc` → Step 11 · no `.mcp.json`/`CLAUDE.md` → Phase D.
+**Resuming mid-flow** — if the folder already has files from an earlier session, read `references/resume.md`: one evidence command, then an ordered rule list that names the step to pick up at. Don't redo prior steps; tell the user where you're resuming and get a one-word confirm.
 
 ---
 
@@ -64,47 +66,49 @@ mkdir -p ~/Projects/<repo-name>
 cd ~/Projects/<repo-name>
 ```
 
-Confirm the folder is empty (`ls -la`). If the skill was invoked from inside an empty, correctly-named folder, skip the `mkdir`. Claude's shell keeps this working directory for the rest of the session — all later commands run here.
+Confirm the folder is empty (`ls -A`). If the skill was invoked from inside an empty, correctly-named folder, skip the `mkdir`. Claude's shell keeps this working directory for the rest of the session — all later commands run here. **Write nothing into it before Step 2** (see Step 2).
 
 ## Preflight — verify the environment
 
 Tell the user "first I'll check your machine has the right tools," then run:
 
 ```bash
-python3 ~/.claude/skills/astro-cloudflare-workers-setup/scripts/preflight.py
+python3 "${CLAUDE_SKILL_DIR}/scripts/preflight.py"
 ```
 
-It checks Node 22+, git, the GitHub CLI (`gh`) and its auth, `curl`, `python3`, and `dig`, and prints exact remediation for any failure. **Accounts it can't check:** a GitHub account is **required** (the repo *and* the Cloudflare auto-deploy connect through it — verified via `gh auth status`); a Cloudflare account is required and is verified later at `wrangler login`.
+It checks Node 22.12+ (24 LTS recommended), git, the GitHub CLI (`gh`) and its auth, `curl`, `python3`, and `dig`, and prints exact remediation for any failure. **Accounts it can't check:** a GitHub account is **required** (the repo *and* the Cloudflare auto-deploy connect through it — verified via `gh auth status`); a Cloudflare account is required and is verified at Step 10.
 
 If anything fails, Claude must **not** silently auto-fix it. **On a brand-new machine, expect several failures — that's normal**, and setting the tools up is a one-time thing; after it, every future project is fast. Guide the user through it:
 
 - **macOS:** install Homebrew (one command from brew.sh), then `brew install node git gh`.
-- **Linux:** install via the package manager — Node must be 22+ (use `nvm` if the distro ships an older one); install `gh` per cli.github.com.
+- **Linux:** install via the package manager — Node 22.12+, ideally 24 LTS (`nvm install 24` if the distro ships an older one); install `gh` per cli.github.com.
 - Then `gh auth login` — an interactive browser/device-code flow; walk the user through each prompt.
 
 Re-run `preflight.py` after remediation and loop until it exits 0. If `python3` isn't found, try `python`.
 
-**Recommended:** add Cloudflare's documentation MCP so Claude can verify current Cloudflare behavior — `claude mcp add --transport http cloudflare-docs https://docs.mcp.cloudflare.com/mcp`. Cloudflare also publishes a Claude Code plugin and account-connected MCP servers (Workers Builds, Observability) — see `developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/`. Step 17 also adds the docs MCP to the project.
+**Recommended:** add the docs MCP servers so Claude can check current behavior — `claude mcp add --transport http cloudflare-docs https://docs.mcp.cloudflare.com/mcp` and `claude mcp add --transport http astro-docs https://mcp.docs.astro.build/mcp` (no auth; Step 8 also adds both to the project's `.mcp.json`). Cloudflare's Claude Code plugin is optional: `/plugin marketplace add cloudflare/skills`, then `/plugin install cloudflare@cloudflare`. If a Cloudflare account MCP (e.g. `mcp.cloudflare.com/mcp`) is already connected, Claude may use it read-only for dashboard read-backs (zone status, Build settings, a failed build's log, conflicting DNS records); never ask users to install it during setup.
 
 ## Confirm inputs
 
 Gather these before any irreversible command (batch them for an experienced user):
 
-1. **Repo name** — defaults to the folder name.
+1. **Repo name and site name** — the repo defaults to the folder name; the display name (page titles, social card) defaults to a title-cased repo name.
 2. **Visibility** — public or private. Never assume.
-3. **One-line description.**
-4. **Site purpose & type** — portfolio, blog, business/professional landing, documentation, event/coming-soon, project page? Drives the JSON-LD schema, the OG image, the brand mark, and the **content model** (Step 13 — a blog or docs site uses Astro Content Collections; a one-pager uses typed data modules).
+3. **One-line description** — also the tagline on the social card.
+4. **Site purpose & type** — portfolio, blog, business/professional landing, documentation, event/coming-soon, project page? Drives the JSON-LD schema, the brand mark, and the **content model** (Step 13 — a blog or docs site uses Astro Content Collections; a one-pager uses typed data modules).
 5. **Primary language** — defaults to English; sets `<html lang>` and `og:locale`.
-6. **Domain** — a custom domain (optional, costs money — Step 11), or just the free `*.workers.dev` URL?
+6. **Domain** — a custom domain (optional, costs money — Step 11), or just the free `*.workers.dev` URL? Record the full hostname (e.g. `example.dev`); never assume `.com`.
 7. **Brand mark** — an existing logo, or should Claude propose a simple one (Step 2)?
 8. **Landing-page content** — gathered in detail at Step 13; don't invent copy.
-9. **⚠️ Anonymity posture — this is a fork.** A normal indexable site (default), **or** a stealth/coming-soon page that must not be discovered yet? Stealth rewrites Steps 13–14 (`references/anonymity-variant.md`). Flag it clearly to the user; if they choose stealth, announce that the variant is active.
+9. **⚠️ Anonymity posture — this is a fork.** A normal indexable site (default), **or** a stealth/coming-soon page that must not be discovered yet? Stealth changes Steps 1, 2, 4, 11 and 13–14 — if chosen, **read `references/anonymity-variant.md` now, before Step 1** (private repo, vague description). Flag it clearly to the user and announce that the variant is active.
+
+The answers are written to `.claude/setup-inputs.json` right after Step 2 — not before.
 
 ---
 
 # Phase A — Foundation
 
-Tell the user: "Phase A — I'll scaffold the project and get it building locally; this part is all me, watch the checklist." Goal: the folder becomes a site that builds clean and passes `wrangler deploy --dry-run`.
+Tell the user: "Phase A — I'll scaffold the project and get it building locally; this part is all me, watch the checklist." Goal: the folder becomes a site that type-checks, builds, and passes `wrangler deploy --dry-run`.
 
 ### Step 1 — GitHub repo + `git init`
 
@@ -118,34 +122,29 @@ gh repo create <repo-name> --private \
 
 Use `--public` if chosen. This creates an **empty** remote (no README/license) — correct; don't `git pull`. Verify with `git remote -v`. Don't push yet — the first commit comes in Step 10. (If the name is already taken or the token lacks `repo` scope, see `references/pitfalls.md`.)
 
-### Step 2 — Scaffold Astro
+### Step 2 — Scaffold Astro, brand mark, images
 
 ```bash
-npm create astro@latest . -- \
-  --template minimal --install --no-git \
-  --typescript strict --skip-houston --yes
+npm create astro@latest . -- --template minimal --install --no-git --no-ai --skip-houston --yes
 ```
 
-Current `create-astro` detects the existing `.git/` and scaffolds in place. Confirm `package.json`, `astro.config.mjs`, `src/pages/index.astro` exist. If `npm install` timed out inside the scaffolder, the scaffold still succeeded — run `npm install` again. If a command ever *hangs*, it hit an interactive prompt with no terminal — Ctrl-C and re-run with the documented flags.
+**The folder must hold nothing but `.git/` when this runs** — otherwise create-astro silently scaffolds into a random `./adjective-noun` subfolder. If a `.claude/` already exists (Claude Code can create one), move it out (`mv .claude ../.claude-hold`) and back afterwards. `--no-ai` stops create-astro writing `AGENTS.md` and a `CLAUDE.md → AGENTS.md` symlink (Step 17 writes the real `CLAUDE.md`); the minimal template already extends `astro/tsconfigs/strict`. Confirm `package.json`, `astro.config.mjs`, `src/pages/index.astro` exist. If `npm install` timed out inside the scaffolder, the scaffold still succeeded — run `npm install` again. If a command ever *hangs*, it hit an interactive prompt with no terminal — Ctrl-C and re-run with the documented flags.
 
-**Replace both default Astro favicons** (`public/favicon.svg` and `public/favicon.ico`). The replacement is a **simple, project-relevant mark** — a monogram of the initials or a minimal geometric/iconographic shape. **Not an emoji, not the Astro logo.** If the project's purpose doesn't suggest an obvious mark, **👤 ask the user** what they'd like (a described concept, their initials, or a logo file — tell them to give you the full path to the file). Claude proposes a concrete mark and the user approves or redirects.
+**Record the inputs** — now that `package.json` exists, Write `.claude/setup-inputs.json` with the Confirm-Inputs answers (real values):
 
-The `.ico` is generated from the SVG with `sharp`. **`sharp` is usually a transitive Astro dependency — verify, don't assume:** run `npm ls sharp`; if absent, `npm install --save-dev sharp`. Then write `scripts/gen-favicon-ico.mjs` and run it **from the project root**:
-
-```js
-// scripts/gen-favicon-ico.mjs — run once: `node scripts/gen-favicon-ico.mjs`, then delete
-import sharp from 'sharp';
-import { writeFileSync } from 'node:fs';
-const png = await sharp('public/favicon.svg').resize(32, 32).png().toBuffer();
-const ICONDIR = Buffer.from([0x00, 0x00, 0x01, 0x00, 0x01, 0x00]);
-const ENTRY = Buffer.alloc(16);
-ENTRY.writeUInt8(32, 0); ENTRY.writeUInt8(32, 1);          // 32×32
-ENTRY.writeUInt16LE(1, 4); ENTRY.writeUInt16LE(32, 6);     // planes, bit depth
-ENTRY.writeUInt32LE(png.length, 8); ENTRY.writeUInt32LE(22, 12); // size, offset
-writeFileSync('public/favicon.ico', Buffer.concat([ICONDIR, ENTRY, png]));
+```json
+{ "repo": "<repo-name>", "visibility": "private", "description": "<description>", "site_type": "<type>", "site_name": "<site-name>", "lang": "en", "locale": "en_US", "domain": null, "stealth": false, "analytics": "pending", "workers_dev_url": null }
 ```
 
-Verify: `file public/favicon.ico` reports `MS Windows icon resource`.
+`domain` is the full hostname, `"tbd"` if they want a custom domain but haven't picked one, or `null` for workers.dev only; `analytics` is `pending`, `declined` or `on`. Update it with Edit as values become known (Steps 10, 11, 16). It's gitignored (Step 8) and deleted at *Completion*.
+
+**Replace the default Astro mark** in `public/favicon.svg` with a **simple, project-relevant mark** — a monogram of the initials or a minimal geometric/iconographic shape. **Not an emoji, not the Astro logo.** If the project's purpose doesn't suggest an obvious mark, **👤 ask the user** what they'd like (a described concept, their initials, or a logo file — tell them to give you the full path to the file). Claude proposes a concrete mark and the user approves or redirects. Then generate every raster image from it in one call, from the project root:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/gen-images.mjs" "<Site Name>" "<one-line description>"
+```
+
+It writes `public/favicon.ico` (16/32/48/64), `public/apple-touch-icon.png` (180×180) and `public/og.webp` (1200×630 neutral text card; text is escaped, long names wrap and shrink). Add `--no-og` for a stealth site or when the user supplies their own `og.webp`. It uses the site's own `sharp`: exit 2 "sharp not found" → `npm i -D sharp` and re-run; exit 2 "still the Astro logo" → replace the mark first. Verify: `file public/favicon.ico` reports `4 icons`.
 
 ### Step 3 — Install the Cloudflare adapter
 
@@ -153,145 +152,152 @@ Verify: `file public/favicon.ico` reports `MS Windows icon resource`.
 npx astro add cloudflare --yes
 ```
 
-This installs `@astrojs/cloudflare` and `wrangler`, adds the adapter to `astro.config.mjs`, adds a `generate-types` script, includes `worker-configuration.d.ts` in `tsconfig.json`, and **generates a complete root `wrangler.jsonc`** (with `main`, `assets`, `compatibility_date`, `compatibility_flags`, `observability`). **Keep it** — the current adapter generates these deliberately and the build depends on them. `worker-configuration.d.ts` doesn't exist yet — Step 6 makes it.
+This installs `@astrojs/cloudflare` and `wrangler`, adds the adapter to `astro.config.mjs`, adds a `generate-types` script, includes `worker-configuration.d.ts` in `tsconfig.json`, and **generates a root `wrangler.jsonc`**. **Keep it** — optional to the build, but it's where `name` (must match the dashboard Worker for Workers Builds), `compatibility_date` and `not_found_handling` live. The adapter stays even though every page is static: it gives workerd-based `astro dev`/`astro preview`, auto-injected immutable caching for `/_astro/*`, and a one-line `prerender = false` opt-in later. `worker-configuration.d.ts` doesn't exist yet — Step 6 makes it.
 
-### Step 4 — Configure `astro.config.mjs`
+### Step 4 — Dependencies + `astro.config.mjs`
 
-**Version-drift check:** run `npm ls astro @astrojs/cloudflare wrangler`. This skill is verified against `astro@6`, `@astrojs/cloudflare@13`, `wrangler@4`. If any has moved a **major** beyond that, the config below and the adapter's generated files may differ — verify against current docs before continuing and tell the user what changed.
+**Version-drift check:**
 
-Edit `astro.config.mjs` (a near-total rewrite of what the adapter left):
+```bash
+npm ls astro @astrojs/cloudflare wrangler --depth=0
+```
+
+Expect `astro@7` (≥7.2), `@astrojs/cloudflare@14` (≥14.2), `wrangler@4` (≥4.135) — the *Verified baseline*. If a **major** is newer, tell the user and offer: (a) pin to the verified majors — `npm install astro@7 @astrojs/cloudflare@14 wrangler@4`; or (b) proceed after checking the upgrade guide and changelog against the config below.
+
+Install the remaining dependencies in one line (stealth: drop `npm i @astrojs/sitemap &&`):
+
+```bash
+npm i @astrojs/sitemap && npm i -D @astrojs/check typescript @types/node@24 prettier prettier-plugin-astro
+```
+
+`@astrojs/check` + `typescript` let `astro check` run without an interactive prompt; `@types/node` matches `.nvmrc`. Then Write the complete `astro.config.mjs` (it replaces what the adapter left):
 
 ```js
 // @ts-check
 import { defineConfig } from 'astro/config';
 import cloudflare from '@astrojs/cloudflare';
+import sitemap from '@astrojs/sitemap';
 
 export default defineConfig({
-  site: 'https://<canonical-domain>',
+  site: 'https://<repo-name>.workers.dev',
   output: 'static',
+  session: false,
   adapter: cloudflare({ imageService: 'compile' }),
+  integrations: [sitemap()],
+  security: { csp: { directives: ["object-src 'none'", "base-uri 'self'"] } },
+  markdown: { syntaxHighlight: false },
 });
 ```
 
-- **`site`** — *required* for absolute URLs (canonical, `og:*`, sitemap). If the domain isn't decided, use `https://<repo-name>.<account-subdomain>.workers.dev` and **update it in Step 11**.
-- **`output: 'static'`** — prerender by default; opt a page into SSR with `export const prerender = false`.
-- **`imageService: 'compile'`** — build-time image transforms; the adapter default (`'cloudflare-binding'`) emits runtime `/_image` URLs that 404 on a static deploy.
+- **`site`** — *required* for absolute URLs (canonical, `og:*`, sitemap). The real workers.dev hostname is only known after the first deploy: Step 10 replaces this with the URL wrangler prints, Step 11 with the custom domain.
+- **`output: 'static'`** — prerender every page; opt one into on-demand rendering with `export const prerender = false`.
+- **`session: false`** (Astro 7.2+) — no sessions on a static site: no SESSION KV binding, nothing provisioned. Remove it only if an on-demand page uses `Astro.session` (wrangler then auto-provisions the namespace on deploy).
+- **`imageService: 'compile'`** — transforms images with sharp at build time and adds no Cloudflare Images (`IMAGES`) binding, so the Worker stays binding-free and builds faster. The default `'cloudflare-binding'` also optimizes prerendered images but attaches an Images binding and emits extra originals.
+- **`security.csp`** — Astro hashes bundled scripts and styles into a real CSP (no `'unsafe-inline'`), emitted as a `<meta>` tag for prerendered pages. A meta CSP can't carry `frame-ancestors`, so `X-Frame-Options` stays in `_headers`. CSP is inactive in `astro dev`. Step 16 adds the analytics host.
+- **`markdown.syntaxHighlight: false`** — Shiki's inline styles are CSP-incompatible (a build warning). A blog/docs site with code blocks uses `'prism'` plus a Prism theme stylesheet.
+- **Stealth:** omit the `sitemap` import and `integrations`.
 
 ### Step 5 — Finish `wrangler.jsonc`
 
-Make exactly these edits to the adapter-generated file: add `$schema`; confirm `compatibility_date` is **today** (`YYYY-MM-DD`); add `nodejs_compat` to `compatibility_flags`; add `not_found_handling` inside `assets`.
+Keep the adapter-generated file; make only two edits: confirm `compatibility_date` is **today** (`YYYY-MM-DD`; the adapter writes the bundled workerd's date, often a day behind), and add `"not_found_handling": "404-page"` inside `assets`. Result:
 
 ```jsonc
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
+  "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "<repo-name>",
   "compatibility_date": "<today YYYY-MM-DD>",
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "main": "@astrojs/cloudflare/entrypoints/server",
-  "assets": {
-    "directory": "./dist",
-    "binding": "ASSETS",
-    "not_found_handling": "404-page"
-  },
+  "assets": { "directory": "./dist", "binding": "ASSETS", "not_found_handling": "404-page" },
   "observability": { "enabled": true }
 }
 ```
 
-`nodejs_compat` exposes the Node APIs the adapter's runtime uses; `global_fetch_strictly_public` blocks SSRF; `not_found_handling: "404-page"` serves `dist/client/404.html` (built from `src/pages/404.astro`, Step 13) with a real HTTP 404. You edit only this file — at build time the adapter writes `dist/server/wrangler.json` and `.wrangler/deploy/config.json`; never hand-edit those.
+`global_fetch_strictly_public` blocks SSRF; `nodejs_compat` is on by default for compatibility dates ≥ 2026-08-04, so don't add it. `not_found_handling: "404-page"` serves `404.html` (Step 13) with a real HTTP 404. For an all-static build the adapter writes an assets-only config to `dist/client/wrangler.json` (no `main`, no bindings); `main`/`ASSETS` only take effect once a page sets `prerender = false`, and output then moves to `dist/server/wrangler.json`. Edit only the root file — never `dist/**/wrangler.json` or `.wrangler/deploy/config.json`.
 
 ### Step 6 — Generate types
 
 ```bash
 npm run generate-types
-npm install --save-dev @types/node
 ```
 
-`worker-configuration.d.ts` (~500 KB) holds Workers runtime types — **commit it**, and **regenerate after any `compatibility_*` or bindings change** in `wrangler.jsonc`.
+`worker-configuration.d.ts` (~600 KB) holds Workers runtime types — **commit it**, and **regenerate after any `compatibility_*` or bindings change** in `wrangler.jsonc`.
 
-### Step 7 — Scripts + `astro check` dependencies
-
-`astro check` (type-checking) needs two devDependencies the minimal scaffold omits. **Install them now** so it never drops into an interactive prompt:
+### Step 7 — Scripts + version
 
 ```bash
-npm install --save-dev @astrojs/check typescript
+npm pkg set scripts.build="astro check && astro build" scripts.check="astro check" scripts.deploy="npm run build && wrangler deploy" scripts.verify="npm run build && wrangler deploy --dry-run" version=0.1.0
 ```
 
-Then set `package.json` scripts:
-
-```json
-"scripts": {
-  "dev": "astro dev",
-  "build": "astro build",
-  "preview": "astro preview",
-  "astro": "astro",
-  "check": "astro check",
-  "deploy": "astro build && wrangler deploy",
-  "generate-types": "wrangler types"
-}
-```
-
-Don't add a `wrangler dev` script for a static site — `astro dev` is the dev server. Always run `astro build` before `wrangler deploy` (the `deploy` script chains them).
+`build` type-checks first, so a type error fails CI instead of shipping. `verify` is the "deploy-ready?" check for this and every later session. Keep the scaffold's `dev`, `preview`, `astro` and the adapter's `generate-types`. Don't add a `wrangler dev` script — `astro dev` and `astro preview` already run in workerd.
 
 ### Step 8 — Project hygiene
 
-- **`.gitignore`** — create it if absent, else append: `.wrangler/`, `.env`, `.env.production`, `.claude/settings.local.json`. Do **not** ignore `worker-configuration.d.ts`.
-- **`.nvmrc`** — `22`. **`package.json` `engines`** — ensure Node 22+ (the scaffold may already set `">=22.x"`; keep it).
-- **`.editorconfig`** — `root = true`; 2-space indent, LF, UTF-8, trim trailing whitespace, final newline.
-- **Prettier** — `npm install --save-dev prettier prettier-plugin-astro`, then `.prettierrc`: `{ "plugins": ["prettier-plugin-astro"] }`.
-- **`.vscode/`** — `extensions.json` = `{ "recommendations": ["astro-build.astro-vscode"] }`; `launch.json` with a `node-terminal` "Dev server" config running `./node_modules/.bin/astro dev`.
-- **Commit `package-lock.json`** — Workers Builds and reproducible installs need it.
+Copy the files that are the same for every site, then append the ignore entries:
 
-> Everything worth backing up *is* committed. The ignored entries are only build artifacts, restorable `node_modules`, secrets, and per-machine settings. Keep secrets out of git even in a private repo (it can be shared, forked, or made public; history is permanent) — their home is Cloudflare's secret store and a password manager. If env vars are ever used, commit a `.env.example` (keys only).
+```bash
+cp -R "${CLAUDE_SKILL_DIR}/assets/site/." .
+for l in .wrangler/ '.env*' '!.env.example' .claude/settings.local.json .claude/setup-inputs.json; do grep -qxF "$l" .gitignore || echo "$l" >> .gitignore; done
+```
+
+**Run the copy once, here** — it overwrites, so on resume it runs only if `.nvmrc` is absent. The ignore loop is idempotent. The copy adds:
+
+- **`.nvmrc`** — `24` (Workers Builds reads it; 24 is the Builds default). Keep the scaffold's `engines` `"node": ">=22.12.0"`.
+- **`.editorconfig`** and **`.prettierrc`** (Prettier + `prettier-plugin-astro`, installed at Step 4; `singleQuote` matches the code this skill writes).
+- **`src/styles/global.css`** — the universal reset only (Step 13).
+- **`public/_headers`** — security headers and immutable `/_astro/*` caching (Step 14).
+- **`.github/dependabot.yml`** — weekly updates, grouped (Astro + Cloudflare packages together, dev tooling together).
+- **`.mcp.json`** — the Cloudflare and Astro docs MCP servers (no auth).
+- **`.claude/settings.json`** — scoped allows for routine commands (`npm run *`, `npx astro *`, the dry-run, `git add/commit/push`, docs fetches); a real `wrangler deploy` still asks. Broad personal allows belong in the gitignored `.claude/settings.local.json`.
+
+The scaffold already ships `.vscode/`, but its `.gitignore` covers only `.env` and `.env.production` — hence the `.env*` line (with `.env.example` kept committable). Do **not** ignore `worker-configuration.d.ts`. **Commit `package-lock.json`** — Workers Builds and reproducible installs need it.
+
+> Everything worth backing up *is* committed. The ignored entries are only build artifacts, restorable `node_modules`, secrets, and per-machine settings. Keep secrets out of git even in a private repo — their home is Cloudflare's secret store and a password manager. If env vars are ever used, commit a `.env.example` (keys only).
 
 ### Step 9 — Verify the foundation
 
 ```bash
-npm run check                           # expect "0 errors"
-rm -rf dist .wrangler && npm run build  # expect "[build] Complete!"
-npx wrangler deploy --dry-run           # no auth needed
+rm -rf dist .wrangler && npm run verify   # no auth needed
 ```
 
-`--dry-run` should report reading from `dist/client` with bindings `env.SESSION` + `env.ASSETS`. Offer the user a first look — `npm run dev` serves the site at `http://localhost:4321` (Ctrl-C to stop), their first sight of it running. Then tell them: "Phase A done — the site builds and runs locally, ready to deploy." See `references/pitfalls.md` for any error.
+Expect `0 errors` (astro check), `[build] Complete!`, then from the dry-run: `Using redirected Wrangler configuration` / `Configuration being used: "dist/client/wrangler.json"`, `Read N files from the assets directory …/dist/client`, and `No bindings found.` A static site has no Worker script, so there's no `env.ASSETS`. If `env.SESSION` or `env.IMAGES` appears, `session: false` or `imageService: 'compile'` is missing.
+
+Offer the user a first look: run `npm run dev`. Under Claude Code, Astro starts it in the background and prints the URL — give the user the one it prints (usually `http://localhost:4321`). When they're done, run `npx astro dev stop` (`npx astro dev status` / `logs` for debugging; `ASTRO_DEV_BACKGROUND=0` opts out; `pkill` does not stop it). Then tell them: "Phase A done — the site builds and runs locally, ready to deploy." See `references/pitfalls.md` for any error.
 
 ---
 
 # Phase B — First Deploy
 
-Tell the user: "Phase B — first deploy. I need you to log in to Cloudflare in your browser."
+Tell the user: "Phase B — first deploy. You may need to log in to Cloudflare in your browser."
 
-### Step 10 — `wrangler login`, SESSION KV, first deploy
+### Step 10 — Cloudflare login + first deploy
 
-**👤 USER ACTION — Cloudflare account, then browser login.** First ask whether the user has a Cloudflare account; if not, they create one now (free) at dash.cloudflare.com — wait for them. Then Claude runs `npx wrangler login`; it opens the browser; the user clicks **Allow** and replies when the terminal shows `Successfully logged in`.
-
-Pre-provision the session KV namespace and add its ID to `wrangler.jsonc`:
+**Check for existing auth first:**
 
 ```bash
-npx wrangler kv namespace create SESSION
+npx wrangler whoami --json >/dev/null 2>&1 && echo authed
 ```
 
-Claude adds the returned ID manually:
+If it prints `authed` (an OAuth session, or `CLOUDFLARE_API_TOKEN`, which takes priority), run `npx wrangler whoami`, confirm the account name with the user, and **skip login** — never run `wrangler login` while `CLOUDFLARE_API_TOKEN` is set. If it fails, check stderr: a network error is not "not logged in".
 
-```jsonc
-"kv_namespaces": [{ "binding": "SESSION", "id": "<32-hex-id from the output>" }]
-```
+**👤 USER ACTION — Cloudflare account, then browser login** (only if not authed). Ask whether the user has a Cloudflare account; if not, they create one now (free) at dash.cloudflare.com — wait for them. Then Claude runs `npx wrangler login` in the background or with a timeout of 10+ minutes (it waits for the browser); the user clicks **Allow** and replies. If the browser can't reach the localhost callback (SSH, container, remote machine), use `npx wrangler login --device` and relay the URL and code promptly — they expire. Re-run the whoami check.
 
-Then deploy and verify:
+Deploy:
 
 ```bash
-npm run generate-types
 npm run deploy
 ```
 
-Wrangler prints the live `<repo-name>.<account-subdomain>.workers.dev` URL. Run the verifier against it:
+Wrangler prints the live `https://<repo-name>.<account-subdomain>.workers.dev` URL. Record it as `workers_dev_url` in `.claude/setup-inputs.json` and set `site` in `astro.config.mjs` to it (one-line Edit; it goes live with the next deploy). Check it's up (a brand-new workers.dev subdomain can take a minute or two to resolve — retry before diagnosing):
 
 ```bash
-python3 ~/.claude/skills/astro-cloudflare-workers-setup/scripts/verify_site.py https://<workers.dev URL>
+curl -sI https://<workers.dev host>
 ```
 
-Headers, CSP, and the 404 already apply on `*.workers.dev`; SEO/sitemap checks may warn until Phase C — that's expected. Then commit and push:
+Expect `HTTP/2 200` and `server: cloudflare`. The full `verify_site.py` run comes at *Completion* — most of its checks depend on Steps 13–16. Then commit and push:
 
 ```bash
-git add . && git commit -m "Initial Astro + Cloudflare Workers setup" && git push -u origin main
+git add -A && git commit -m "Initial Astro + Cloudflare Workers setup" && git push -u origin main
 ```
 
 **This is the milestone — make it land.** Tell the user, with genuine enthusiasm: "🎉 Your website is live on the internet — open it now: <URL>. That's a real, public, HTTPS site, served worldwide from Cloudflare's edge." Invite them to click it, refresh it, share it. If they're stopping here, it's a clean pause point.
@@ -304,35 +310,45 @@ Tell the user: "Phase C — making it production-grade: domain, auto-deploy, con
 
 ### Step 11 — Custom domain
 
-A custom domain is optional — the site already works on `*.workers.dev`. If the user wants one, the domain must become an **active zone in their Cloudflare account**. Three cases:
+A custom domain is optional — the site already works on `*.workers.dev`. If the user wants one, the domain must become an **active zone in their Cloudflare account**. `<domain>` below is always the full hostname the user chose (e.g. `example.dev`). Three cases:
 
-**Case 1 — no domain yet → buy one on Cloudflare Registrar.** 👤 USER ACTION. First Claude **confirms the exact domain name in writing** (a typo is bought and paid for) and states plainly: it costs ≈ $10/yr, **auto-renews**, and needs a card. Then: `dash.cloudflare.com → Domain Registration → Register Domains` → search → purchase. It becomes an active zone immediately with Cloudflare-managed DNS — the cleanest path (no nameserver changes, no 100117 conflict below).
+**Case 1 — no domain yet → buy one on Cloudflare Registrar.** 👤 USER ACTION. First Claude **confirms the exact domain name in writing** (a typo is bought and paid for) and states plainly: it costs ≈ $10/yr, **auto-renews**, and needs a card. Easiest: `Workers & Pages → <worker> → Domains → + Add Domain → Buy a domain` registers it and attaches it in one flow; otherwise `Domain Registration → Register Domains` → search → purchase. It becomes an active zone immediately with Cloudflare-managed DNS — no nameserver changes, no 100117 conflict below.
 
-**Case 2 — domain owned elsewhere → bring it to Cloudflare.** 👤 USER ACTION: transfer it in (`Transfer Domains`, EPP/auth code, up to 5 days) or add it as a zone and point the registrar's nameservers at Cloudflare's.
+**Case 2 — domain owned elsewhere → bring it to Cloudflare.** 👤 USER ACTION: transfer it in (`Transfer Domains`, EPP/auth code, up to 5 days) or add it as a zone (`Domains` (formerly `Websites`) → Onboard a domain) and point the registrar's nameservers at Cloudflare's.
 
 **Case 3 — already a Cloudflare zone → proceed.**
 
-Once the domain is an active zone: **update `site` in `astro.config.mjs`** to `https://<domain>`, attach the domain in `wrangler.jsonc`, and rebuild:
+If the user decides against a custom domain after all, set `domain` to `null` in `.claude/setup-inputs.json` and skip to Step 12.
+
+Once the domain is an active zone: record the hostname as `domain` in `.claude/setup-inputs.json` (replacing `"tbd"`), **update `site`** in `astro.config.mjs` to `https://<domain>`, and attach the apex in `wrangler.jsonc`:
 
 ```jsonc
 "workers_dev": true,
-"routes": [
-  { "pattern": "<domain>.com", "custom_domain": true },
-  { "pattern": "www.<domain>.com", "custom_domain": true }
-]
+"routes": [{ "pattern": "<domain>", "custom_domain": true }]
 ```
 
-`workers_dev: true` keeps the `*.workers.dev` fallback alive. Then `npm run generate-types` and `npm run deploy`.
+`workers_dev: true` keeps the `*.workers.dev` fallback alive; noindex it so it doesn't compete with the real domain — append to `public/_headers` (the real host from Step 10):
 
-**Pitfall — error 100117 "externally managed DNS records":** if the hostname already has user-created A/AAAA/CNAME records the deploy fails. **👤 USER ACTION:** in `dash.cloudflare.com → Websites → <zone> → DNS → Records`, delete the conflicting `A`/`AAAA` on the apex and any `CNAME` on `www` — leave `MX`/`TXT` alone — then Claude redeploys. (`override_existing_dns_record` does not fix the generic case — workers-sdk#9878.)
+```
+https://<repo-name>.<account-subdomain>.workers.dev/*
+  X-Robots-Tag: noindex
+```
 
-Verify (pass `@1.1.1.1` — a bare `dig` caches a stale empty answer): `dig @1.1.1.1 +short <domain>.com A` and `curl -sI https://<domain>.com`. If `dig` is absent, `verify_site.py` (pure-Python) covers reachability.
+Then `npm run deploy`.
 
-**Credentials:** every part of this stack authenticates by OAuth (`wrangler login`, the Workers Builds GitHub App, Cloudflare MCP) — there is **no long-lived API token** to store. Email setup (MX records) is out of scope — point the user to their registrar if they ask.
+**Pitfall — error 100117 "externally managed DNS records":** if the hostname already has user-created A/AAAA/CNAME records the deploy fails. **👤 USER ACTION:** in `Domains` (formerly `Websites`) `→ <zone> → DNS → Records`, delete the conflicting `A`/`AAAA` on the apex and any `CNAME` on `www` — leave `MX`/`TXT` alone — then Claude redeploys. (`override_existing_dns_record` does not fix the generic case — workers-sdk#9878.)
+
+**www → apex — 👤 USER ACTION (recommended; one canonical host).** `<zone> → DNS → Records → Add record`: type `A`, name `www`, IPv4 `192.0.2.0`, **Proxied**. Then `Rules → Redirect Rules → Create from template → "Redirect from WWW to root"` (301).
+
+Verify (pass `@1.1.1.1` — a bare `dig` caches a stale empty answer): `dig @1.1.1.1 +short <domain> A`, `curl -sI https://<domain>` (200, `server: cloudflare`), and `curl -sI https://www.<domain>` (301 to the apex). If `dig` is absent, `curl` covers reachability. Commit and push: `git add -A && git commit -m "Add custom domain" && git push`.
+
+**Credentials:** local deploys use `wrangler login` (OAuth) or `CLOUDFLARE_API_TOKEN` (takes priority). Workers Builds (Step 12) auto-creates its own scoped user API token in the Cloudflare dashboard — don't delete it, or auto-deploy breaks. No secrets live in the repo or GitHub. Email setup (MX records) is out of scope — point the user to their registrar if they ask.
 
 ### Step 12 — GitHub-connected auto-deploy (Cloudflare Workers Builds)
 
-This connects the repo to Cloudflare so every push to `main` auto-deploys and other branches get preview URLs. Workers Builds, not GitHub Actions — first-party previews, no token to rotate.
+This connects the repo to Cloudflare so every push to `main` auto-deploys, and PRs and other branches get a Preview (URL posted as a PR comment). Workers Builds, not GitHub Actions — first-party previews, no secrets in GitHub to manage.
+
+The Worker's name in the dashboard must equal `name` in `wrangler.jsonc`. If it doesn't, the build fails and Workers Builds opens a "name conflict" pull request — merge it or fix `name`; don't close it unread.
 
 **👤 USER ACTION — connect the repo in the dashboard.** Relay these as a step-by-step checklist and have the user confirm each:
 
@@ -342,13 +358,22 @@ This connects the repo to Cloudflare so every push to `main` auto-deploys and ot
    - **Production branch:** `main`
    - **Build command:** `npm run build`
    - **Deploy command:** `npx wrangler deploy`
-   - **Non-production deploy command:** `npx wrangler versions upload`
-   - **Builds for non-production branches:** enabled
-   - **Node version:** `22`
-4. Save, and enable **Build cache**.
-5. **Success looks like:** the Build tab now shows the connected repo and branch. Ask the user to confirm they see that.
+   - **Preview command:** leave the default `npx wrangler preview`
+   - **Branch control → Enable Preview Builds:** checked
+   - (No Node field — the build reads `.nvmrc` from Step 8.)
+4. Save, then `Settings → Build → Build cache → Enable`.
+5. **Success looks like:** the Build tab shows the connected repo and branch. Ask the user to confirm they see that.
 
-**Trigger and verify the first build.** Claude pushes an empty commit (`git commit --allow-empty -m "ci: trigger first build" && git push`). Then **confirm the build actually succeeded** before moving on — 👤 ask the user to check `Workers & Pages → <worker> → Deployments` shows a successful build, or use the Workers Builds MCP. If it failed, open the build log (Step 18.E). Auto-deploy is the headline feature — don't leave Step 12 until it's confirmed working.
+Previews need wrangler ≥4.135 (Step 3 installs newer). workers.dev previews get `X-Robots-Tag: noindex` automatically; custom-domain previews don't. A "Set up Worker Previews" banner on an older Worker is a one-way switch.
+
+**Trigger and verify the first build** — no dashboard trip needed:
+
+```bash
+git commit --allow-empty -m "ci: trigger first build" && git push
+gh api "repos/{owner}/{repo}/commits/$(git rev-parse HEAD)/check-runs?per_page=100" --jq '.check_runs[]|select(.name|startswith("Workers Builds"))|"\(.status) \(.conclusion) \(.details_url)"'
+```
+
+Re-run the `gh api` line about every 30 s (Monitor or a background until-loop). Empty output means still building — the check run usually appears only when the build finishes. `completed success` means connected and deployed. `failure` → give the user the `details_url` and go to Step 18.E (`references/maintenance.md`). Nothing after ~10 minutes → 👤 ask the user to check `Workers & Pages → <worker> → Deployments`. Auto-deploy is the headline feature — don't leave Step 12 until a build has succeeded.
 
 ### Step 13 — Content, styling & SEO
 
@@ -356,35 +381,20 @@ This connects the repo to Cloudflare so every push to `main` auto-deploys and ot
 
 **Content architecture — so "adding content" stays a one-file edit:**
 - **Reusable UI → `src/components/`** — Astro's standard; build pages from small components.
-- **Content model — by site shape:** *a one-pager or a few unique pages* (this skill's default) → keep copy/links in **typed `.ts` modules under `src/data/`** (`as const`, with types); Astro's own guidance says *don't* use Content Collections for just a few pages. *A blog, docs, or any collection of like content* → **Astro Content Collections** (`src/content.config.ts`, `defineCollection`, a `glob()` loader, Zod schemas; query with `getCollection()`; render via `src/pages/blog/[...slug].astro`; add RSS with `npx astro add rss`).
+- **Content model — by site shape:** *a one-pager or a few unique pages* (this skill's default) → keep copy/links in **typed `.ts` modules under `src/data/`** (`as const`, with types); Astro's own guidance says *don't* use Content Collections for just a few pages. *A blog, docs, or any collection of like content* → **Astro Content Collections** (`src/content.config.ts`, `defineCollection`, a `glob()` loader, Zod schemas; query with `getCollection()`; render via `src/pages/blog/[...slug].astro`). RSS: `npm install @astrojs/rss` plus `src/pages/rss.xml.js` returning `rss({ title, description, site: context.site, items })`, and `<link rel="alternate" type="application/rss+xml" href="/rss.xml">` in the head. Astro 7 renders Markdown with Sätteri; remark/rehype plugins need `@astrojs/markdown-remark` and `markdown: { processor: unified() }`.
 
-**`src/styles/global.css`** — create it with only the universal, non-opinionated reset, and import it in `Layout.astro`. This is the canonical scaffold: a wired-up home for site-wide styles that future work extends, with **no visual decisions baked in** — no colors, fonts, type scale, or layout for the user to discover and undo.
+**`src/styles/global.css`** (copied at Step 8) holds only the universal, non-opinionated reset — `box-sizing` and responsive images, conventions every site wants and no one reverses. It's a wired-up home for site-wide styles with **no visual decisions baked in** — no colors, fonts, type scale, or layout for the user to discover and undo. The delivered page is structurally complete, semantic, and accessible on browser defaults.
 
-```css
-/* src/styles/global.css — site styles. Add your design here. */
+**Hand off the design — don't leave it as a silent loose end.** The page is intentionally plain, and a user who sees their live site unstyled may think something broke. Tell them clearly that this is *by design, not broken* — nothing visual was baked in, so there's nothing to fight later — and give them the on-ramp: *"When you want it styled, just ask me — describe the look you want, or say 'design my site' — and I'll build the design on this structure."* (Claude can use the `frontend-design` skill for that.)
 
-*, *::before, *::after {
-  box-sizing: border-box;
-}
-
-img, picture, svg {
-  max-width: 100%;
-  height: auto;
-}
-```
-
-`box-sizing` and responsive images are baseline conventions every site wants and no one reverses; everything beyond that — color, typography, spacing, layout — is the user's to choose. The delivered page is structurally complete, semantic, and accessible on browser defaults.
-
-**Hand off the design — don't leave it as a silent loose end.** The page is intentionally plain, and a user who sees their live site unstyled may think something broke. Tell them clearly that this is *by design, not broken* — nothing visual was baked in, so there's nothing to fight later — and give them the on-ramp: *"When you want it styled, just ask me — describe the look you want, or say 'design my site' — and I'll build the design on this structure."* (Claude can use the `frontend-design` skill for that.) The user should never look at their plain site and wonder what went wrong.
-
-**`src/layouts/Layout.astro`** — `import '../styles/global.css';`, set `<html lang="<language>">`, and include the head metadata:
+**`src/layouts/Layout.astro`** — imports `global.css`, sets `<html lang>`, and carries the head metadata:
 
 ```astro
 ---
 import '../styles/global.css';
 import { jsonLd } from '../data/site';
-interface Props { title: string; description?: string; }
-const { title, description } = Astro.props;
+interface Props { title: string; description?: string; noindex?: boolean; }
+const { title, description, noindex } = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site);
 const ogImage = new URL('/og.webp', Astro.site).href;
 ---
@@ -397,18 +407,20 @@ const ogImage = new URL('/og.webp', Astro.site).href;
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="canonical" href={canonical} />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    {noindex ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={canonical} />}
     <title>{title}</title>
     {description && <meta name="description" content={description} />}
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="<site-name>" />
     <meta property="og:locale" content="<locale>" />
-    <meta property="og:url" content={canonical} />
+    {!noindex && <meta property="og:url" content={canonical} />}
     <meta property="og:title" content={title} />
     {description && <meta property="og:description" content={description} />}
     <meta property="og:image" content={ogImage} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={title} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     {description && <meta name="twitter:description" content={description} />}
@@ -421,68 +433,65 @@ const ogImage = new URL('/og.webp', Astro.site).href;
 
 Set `lang` and `og:locale` to the project's actual language (Confirm Inputs Q5).
 
-**`src/pages/index.astro`** — the landing page: the user's copy, wrapped in `Layout`, semantic HTML (`<main>`, a single `<h1>`, headings, paragraphs, links). Structurally clean; no CSS.
+**`src/data/site.ts`** — the page copy as typed `as const` exports (name, headline, intro, sections, links), plus `jsonLd`: pick the schema.org `@type` for the site (`Person`, `Organization`, `LocalBusiness`, `WebSite`, `Physician`, …). The user edits copy here, never in page markup.
 
-**`src/pages/404.astro`** — uses `Layout`, an `<h1>` and a home link; builds to `dist/client/404.html`.
+**`src/pages/index.astro`** — the landing page: renders the copy from `src/data/site.ts`, wrapped in `Layout`, semantic HTML (`<main>`, a single `<h1>`, headings, paragraphs, links). Structurally clean; no CSS. Astro 7 strips whitespace between elements on separate lines (`compressHTML: 'jsx'`) — keep inline text and links on one line or insert `{" "}`, and read the built `dist/client/index.html` to confirm words don't run together.
 
-**JSON-LD** — `src/data/site.ts` exports `jsonLd`; pick the schema.org `@type` for the site (`Person`, `Organization`, `LocalBusiness`, `WebSite`, `Physician`, …).
+**`src/pages/404.astro`** — uses `<Layout title="Page not found" noindex>`, an `<h1>` and a home link; builds to `dist/client/404.html`. `noindex` drops the canonical/`og:url` (the page is also reachable at `/404` with status 200, so it must not claim a canonical URL).
 
-**Sitemap** — `npx astro add sitemap --yes` (auto-emits `sitemap-index.xml`). **`public/robots.txt`** — one line: `Sitemap: https://<canonical-domain>/sitemap-index.xml`.
+**Sitemap** — already configured (Step 4); it emits `sitemap-index.xml`. **`public/robots.txt`**:
 
-**OG image** — `public/og.webp`, 1200×630, stable URL. Generate one even with no photo — a text card always works (`sharp` from Step 2):
-
-```js
-// scripts/gen-og.mjs — run once, then delete
-import sharp from 'sharp';
-const name = '<site-name>', tagline = '<one-line description>';
-const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630">
-  <rect width="1200" height="630" fill="#1a1a1a"/>
-  <text x="80" y="320" font-family="sans-serif" font-size="76" fill="#fff" font-weight="700">${name}</text>
-  <text x="80" y="400" font-family="sans-serif" font-size="36" fill="#999">${tagline}</text>
-</svg>`;
-await sharp(Buffer.from(svg)).webp({ quality: 90 }).toFile('public/og.webp');
+```
+User-agent: *
+Allow: /
+Sitemap: https://<canonical-domain>/sitemap-index.xml
 ```
 
-If the project has a logo or portrait, composite it onto the card instead. **`public/apple-touch-icon.png`** — 180×180 from the brand mark. **`public/.well-known/security.txt`** (optional) — `Contact:` + `Expires:`.
+Optional: if the user wants to opt out of AI training, 👤 they can enable Managed robots.txt (AI Crawl Control) on the zone; Cloudflare then prepends its own rules to the live `robots.txt` — expected, and the verifier tolerates it.
 
-**Step 13 completion check** — confirm `public/og.webp`, `public/apple-touch-icon.png`, `public/favicon.svg`, `public/favicon.ico`, `src/pages/404.astro`, `src/styles/global.css`, `src/data/site.ts` all exist, then `npm run build` clean.
+**Images** — `og.webp`, `apple-touch-icon.png` and `favicon.ico` came from Step 2; re-run `gen-images.mjs` only if the site name or tagline changed. If the user wants a photo or logo card instead, replace `public/og.webp` with a 1200×630 image and pass `--no-og` on any re-run. **`public/.well-known/security.txt`** (optional) — `Contact:` + `Expires:`.
+
+**Step 13 completion check** — confirm `public/og.webp` (not for stealth), `public/apple-touch-icon.png`, `public/favicon.svg`, `public/favicon.ico`, `src/pages/404.astro`, `src/styles/global.css`, `src/data/site.ts` exist. Then the placeholder-leak check — **passing = no output** (grep then exits 1, or 2 before Step 17 creates `CLAUDE.md`; neither is an error):
+
+```bash
+grep -rInE '\{\{|<(repo-name|domain|canonical-domain|lang|locale|site-name|Site Name|tagline|token|description|worker-name|account-subdomain|workers\.dev host|today YYYY-MM-DD|skill-dir|placeholder|github-repo-URL|name / purpose / type|Cloudflare Registrar / external)>' src public astro.config.mjs wrangler.jsonc CLAUDE.md README.md 2>/dev/null
+```
+
+Then the **local check** — the same sequence ends Steps 13, 14 and 16. It formats what Claude wrote first, so the user's editor never reformats it later:
+
+```bash
+npx prettier --write src astro.config.mjs --log-level warn
+npm run build && npm run preview
+python3 "${CLAUDE_SKILL_DIR}/scripts/verify_site.py" http://localhost:4321 --local
+npx astro preview stop
+```
+
+Use the URL the preview prints. Expect 0 FAIL; SKIPs are checks that need the live host; a "Hashed asset … nothing to verify" WARN is normal on a page with no bundled JS, `<Image>` or fonts; the analytics WARN clears at Step 16 (it stays if analytics is declined). **Stealth:** add `--stealth` here and in Steps 14/16 — never remove the noindex layers to clear a standard-mode FAIL. Commit the step's work (Step 17 pushes it).
 
 For a **stealth** site, this step changes — `references/anonymity-variant.md`.
 
 ### Step 14 — Performance: fonts, CSP, headers
 
-**Fonts** — a typeface is a styling decision, so the skill doesn't pick one; the site ships with browser-default fonts. When the user adds a font (as part of styling), the canonical way is **Astro's built-in Fonts API** (v6+), *not* `@fontsource`: declare it in `astro.config.mjs` under `fonts: [{ provider: fontProviders.google(), name: '<font>', cssVariable: '--font-x', weights: [...], subsets: ['latin'] }]` (import `fontProviders` from `astro/config`), render `<Font cssVariable="--font-x" preload />` from `astro:assets` in `Layout.astro`'s head, and use `var(--font-x)` in their CSS. It self-hosts at build time with automatic fallback metrics. Note this pattern in the project `CLAUDE.md` so it's there when wanted.
+**Fonts** — a typeface is a styling decision, so the skill doesn't pick one; the site ships with browser-default fonts. When the user adds a font (as part of styling), the canonical way is **Astro's built-in Fonts API**, *not* `@fontsource`: declare it in `astro.config.mjs` under `fonts: [{ provider: fontProviders.google(), name: '<font>', cssVariable: '--font-x', weights: [...], subsets: ['latin'] }]` (import `fontProviders` from `astro/config`), render `<Font cssVariable="--font-x" preload />` from `astro:assets` in `Layout.astro`'s head, and use `var(--font-x)` in their CSS. It self-hosts at build time with automatic fallback metrics. Note this pattern in the project `CLAUDE.md` so it's there when wanted.
 
-**CSP — Astro's built-in API:** add `security: { csp: true }` to `defineConfig`. Astro hashes bundled scripts and scoped styles — a real CSP, no `'unsafe-inline'`. On the Cloudflare adapter it's delivered as a `<meta>` tag (so `X-Frame-Options` stays in `_headers`). CSP is inactive in `astro dev`.
+**CSP** — configured at Step 4 (`security.csp`); nothing to add until Step 16.
 
-**`public/_headers`:**
+**`public/_headers`** (copied at Step 8) — HSTS `max-age=31536000; includeSubDomains`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, and immutable caching for `/_astro/*` (the adapter also injects that; the rule is a fallback). HSTS `preload` is opt-in only — hstspreload.org calls it "not recommended" and removal takes months. Drop `includeSubDomains` if any subdomain is HTTP-only.
 
-```
-/*
-  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
-  X-Content-Type-Options: nosniff
-  X-Frame-Options: DENY
-  Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: camera=(), microphone=(), geolocation=()
-
-/_astro/*
-  Cache-Control: public, max-age=31536000, immutable
-```
-
-**Verify locally** before deploying: `npm run build && npm run preview`, then check the CSP `<meta>` tag is present in the previewed HTML. Confirm `_headers` landed at `dist/client/_headers`.
+**Verify locally** — run the local check (Step 13) and confirm `dist/client/_headers` exists.
 
 **Images** — with `imageService: 'compile'` use `<Image>` from `astro:assets` freely; `loading="eager" fetchpriority="high"` for the LCP image, `lazy` below the fold.
 
-### Step 15 — Accessibility (WCAG 2.1 AA)
+### Step 15 — Accessibility (WCAG 2.2 AA)
 
 Structural accessibility is done at setup; visual accessibility is guidance for when the user adds styles. (An unstyled page already passes contrast and focus checks — browser defaults are accessible; the risk appears only once styling begins.)
 
 - **Structure — do now:** `<footer>` is a **sibling** of `<main>`, never nested inside it; `<nav aria-label="…">` around any icon nav; `aria-label` on every icon-only `<a>`; semantic HTML over `<div>`; never `loading="lazy"` the LCP image.
-- **Visual — guidance for when the user styles:** keep text contrast ≥ 4.5:1; if a custom focus style replaces the browser default, ensure `:focus-visible` rings stay clearly visible.
+- **Visual — guidance for when the user styles:** text contrast ≥ 4.5:1; if a custom focus style replaces the browser default, keep `:focus-visible` rings clearly visible; interactive targets ≥ 24×24 CSS px (SC 2.5.8); a sticky header/footer must not cover the focused element (SC 2.4.11 — `scroll-padding-top` equal to the header height); help/contact links in the same place on every page (SC 3.2.6).
 
 ### Step 16 — Cloudflare Web Analytics
 
-**👤 USER ACTION:** in `dash.cloudflare.com → Web Analytics`, add the site and choose **"Enable with JS Snippet installation"** (plain auto-inject is Pages-only). Cloudflare shows a `<script>` snippet — tell the user to **paste the whole snippet to Claude**; Claude extracts the token. Claude adds the beacon to `Layout.astro` `<head>`, PROD-gated:
+**👤 USER ACTION:** `dash.cloudflare.com → Web Analytics → Add a site` — pick the proxied hostname, or type the workers.dev one. If automatic setup shows as enabled, switch it to **Enable with JS Snippet installation** under Manage site: we install the snippet ourselves so it works on workers.dev too, stays inside our CSP, and isn't loaded twice. Tell the user to **paste the whole snippet to Claude**; Claude extracts the token and sets `analytics` in `.claude/setup-inputs.json` (`declined` if they skip this step). Claude adds the beacon to `Layout.astro` `<head>`, PROD-gated:
 
 ```astro
 {import.meta.env.PROD && (
@@ -491,30 +500,42 @@ Structural accessibility is done at setup; visual accessibility is guidance for 
 )}
 ```
 
-The token is public-by-design — committing it is fine.
+Then allow the beacon host in the CSP — add `scriptDirective` inside the Step 4 `security.csp` (the block as Prettier formats it):
+
+```js
+  security: {
+    csp: {
+      directives: ["object-src 'none'", "base-uri 'self'"],
+      scriptDirective: {
+        resources: ["'self'", 'https://static.cloudflareinsights.com'],
+      },
+    },
+  },
+```
+
+`'self'` is required because `resources` replaces the default. Verify with `npm run build && grep -o 'script-src[^;]*' dist/client/index.html` — it must include `https://static.cloudflareinsights.com` — then run the local check (Step 13). The token is public-by-design — committing it is fine.
 
 ---
 
 # Phase D — Project setup for Claude Code
 
-### Step 17 — `README.md`, `CLAUDE.md`, `.claude/`, `.mcp.json`, `CHANGELOG.md`, `ROADMAP.md`
+### Step 17 — `README.md`, `CLAUDE.md`, `CHANGELOG.md`, `ROADMAP.md`
 
 Set the repo up so future Claude sessions are productive immediately and project knowledge stays *in the repo*. Tell the user in one line: "these files let me — or any future Claude session — pick this project up instantly; you don't need to read them."
 
 - **`README.md`** — replace the scaffold's placeholder: project name, one-line description, stack, local-dev commands, the deploy model, project layout, a pointer to `CLAUDE.md`. README is for humans; `CLAUDE.md` is for Claude.
-- **`CLAUDE.md`** — from `assets/CLAUDE.md.template` in this skill directory, with the project's real values. No placeholders.
-- **`.claude/settings.json`** — permissive, so the owner isn't prompted during normal work (it's their project, set up in a trusted session):
-  ```json
-  { "permissions": { "allow": ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch"] } }
-  ```
-- **`.mcp.json`** (repo root) — `{ "mcpServers": { "cloudflare-docs": { "type": "http", "url": "https://docs.mcp.cloudflare.com/mcp" } } }`.
-- **`CHANGELOG.md`** — Keep-a-Changelog format; start with `[0.1.0]` dated today (also set `package.json` `"version": "0.1.0"`).
+- **`CLAUDE.md`** — from `${CLAUDE_SKILL_DIR}/assets/CLAUDE.md.template`, with the project's real values (from `.claude/setup-inputs.json`). No placeholders — drop the template's `> Fill every <placeholder>` line too. **Stealth:** append a "Stealth posture & launch checklist" section from `references/anonymity-variant.md`, writing its image step as "run the setup skill's `gen-images.mjs` without `--no-og`" rather than a `<skill-dir>` path. If `CLAUDE.md` is a symlink (a scaffolder's `AGENTS.md` link), remove it first: `[ -L CLAUDE.md ] && rm CLAUDE.md`.
+- **`CHANGELOG.md`** — Keep-a-Changelog format; start with `[0.1.0]` dated today (`package.json` is already `0.1.0` from Step 7).
 - **`ROADMAP.md`** — `Now` / `Next` / `Later` sections; 👤 ask the user what belongs there.
-- **`.github/dependabot.yml`** — automated dependency updates, set-and-forget, so the finished site stays current without the user thinking about it: `version: 2` with `updates: [{ package-ecosystem: "npm", directory: "/", schedule: { interval: "weekly" } }]`.
+- **Already in place from Step 8** — `.claude/settings.json`, `.mcp.json`, `.github/dependabot.yml`; leave them.
 - **Memory & knowledge policy** — the `CLAUDE.md` (from the template) instructs future sessions to record decisions in `CLAUDE.md`/`CHANGELOG.md`/`ROADMAP.md`, **not** in personal Claude memory. Project knowledge belongs in the repo.
 - **Public repos:** 👤 ask whether they want a `LICENSE` (no license = all-rights-reserved by default).
 
-Commit: `git add . && git commit -m "docs: add README, project guide, Claude Code setup, changelog, roadmap"`.
+Commit and push — Workers Builds deploys everything since Step 12:
+
+```bash
+git add -A && git commit -m "docs: add README, project guide, changelog, roadmap" && git push
+```
 
 ---
 
@@ -522,20 +543,23 @@ Commit: `git add . && git commit -m "docs: add README, project guide, Claude Cod
 
 The skill is **finished** when every Phase A–D step is done and the live site verifies clean.
 
-1. **Verify** — `python3 ~/.claude/skills/astro-cloudflare-workers-setup/scripts/verify_site.py https://<canonical-domain>` (or the `*.workers.dev` URL if there's no custom domain). Resolve every `[FAIL]`.
-2. **Confirm the checklist** is fully done.
-3. **Deliver the Completion Summary** — fill in real values:
+1. **Build** — re-run the Step 12 `gh api` check-runs line until it shows `completed success` for `HEAD`.
+2. **Verify live** — `python3 "${CLAUDE_SKILL_DIR}/scripts/verify_site.py" https://<canonical-domain>` (or the `*.workers.dev` URL if there's no custom domain); add `--stealth` for the anonymity variant — never remove the noindex layers to clear a standard-mode FAIL. Resolve every `[FAIL]`. A "Hashed asset … nothing to verify" WARN is normal on a page with no bundled JS, `<Image>` or fonts.
+3. **Leak check** — the Step 13 `grep` prints nothing.
+4. **Clean up** — `rm .claude/setup-inputs.json`; its facts now live in `CLAUDE.md`.
+5. **Confirm the checklist** is fully done.
+6. **Deliver the Completion Summary** — fill in real values:
 
 > ✅ **Setup is complete — your site is live.**
 >
-> - **Live site:** https://<canonical-domain> — open it; that's a real, public website. (`*.workers.dev` is a backup URL.)
+> - **Live site:** https://<canonical-domain> — open it; that's a real, public website. (`*.workers.dev` is a backup URL.) *Stealth — instead: "it's live and reachable, but kept out of search engines until launch."*
 > - **Repository:** <github-repo-URL>
-> - **Auto-deploy:** every `git push` to `main` rebuilds and publishes in ~30s; other branches get their own preview URLs. You never run a deploy command again.
-> - **Edit your content:** open a file in `src/data/` — e.g. to change the headline, edit the text between the quotes in `src/data/site.ts` and save. Preview locally with `npm run dev` (→ localhost:4321), then `git add -A && git commit -m "update" && git push` — live in ~30s. (A blog post: add a file under `src/content/`.)
+> - **Auto-deploy:** every `git push` to `main` rebuilds and publishes within a couple of minutes; PRs and other branches get a Preview (URL posted as a PR comment). You never run a deploy command again.
+> - **Edit your content:** open a file in `src/data/` — e.g. to change the headline, edit the text between the quotes in `src/data/site.ts` and save. Preview locally with `npm run dev` (→ localhost:4321), then `git add -A && git commit -m "update" && git push` — live within a couple of minutes. (A blog post: add a file under `src/content/`.)
 > - **Design it:** your site is intentionally plain — no styling was baked in, so nothing fights you. Ask me "design my site" or describe the look you want, and I'll style it on this structure. Nothing is broken.
 > - **The repo documents itself:** `README.md`, `CLAUDE.md`, `CHANGELOG.md`, `ROADMAP.md`.
-> - **Handled — you don't think about these again:** hosting is free on Cloudflare's edge; HTTPS is automatic and renews itself; security headers and a real 404 are set; Dependabot keeps dependencies current via automatic PRs; your whole site is backed up in GitHub (laptop dies → nothing lost); if a deploy ever fails, Cloudflare emails you and the previous version stays live.
-> - **Verified:** `verify_site.py` confirmed HTTPS + Cloudflare, security headers, CSP, SEO/OG/JSON-LD, sitemap, the custom 404, and analytics.
+> - **Handled — you don't think about these again:** hosting is free on Cloudflare's edge; HTTPS is automatic and renews itself; security headers and a real 404 are set; Dependabot keeps dependencies current via automatic PRs; your whole site is backed up in GitHub (laptop dies → nothing lost); if a build ever fails, the commit shows a red ✗ in GitHub and the previous version stays live.
+> - **Verified:** `verify_site.py` confirmed HTTPS + Cloudflare, security headers, CSP, SEO/OG/JSON-LD, sitemap, the custom 404, and — if Web Analytics is on — that its beacon is present and allowed by the CSP. *Stealth — instead: HTTPS + Cloudflare, security headers, CSP, the `noindex` meta + `X-Robots-Tag`, a crawlable `robots.txt`, and the custom 404.*
 
 Then **stop** — the skill's job is done. Tell the user the Maintenance section is reference for later and needs nothing now.
 
@@ -543,23 +567,13 @@ Then **stop** — the skill's job is done. Tell the user the Maintenance section
 
 # Phase E — Maintenance (ongoing — after the skill is complete)
 
-*Not part of setup. Reference for keeping the site healthy; run only when the user asks.*
-
-### Step 18 — Ongoing maintenance
-
-- **A. `compatibility_date` bumps** — update `wrangler.jsonc`, then always `npm run generate-types`.
-- **B. Dependency updates** — Dependabot (set up in Step 17) opens weekly PRs; review and merge them. Bump `astro`, `@astrojs/cloudflare`, `wrangler`, `@astrojs/sitemap` together; keep dependency bumps in their own commits.
-- **C. New content** — a page: `src/pages/<name>.astro`. A blog post / collection entry: a file under `src/content/…` (the schema validates it, the dynamic route renders it). Both prerender and join the sitemap. Log it in `CHANGELOG.md`.
-- **D. New dynamic page** — `export const prerender = false` in its frontmatter; add a `"cf-preview": "astro build && wrangler dev"` script to test the Cloudflare runtime locally.
-- **E. Workers Builds debugging** — `dash.cloudflare.com → Workers & Pages → <worker> → Deployments` → the failed build's log. Common causes: Node version, missing `package-lock.json`, `wrangler.jsonc` syntax. The Workers Builds / Observability MCP servers let Claude inspect builds and logs directly.
-- **F. Monitoring** — Web Analytics for traffic; `wrangler tail` for runtime errors.
-- **G. Keep docs live** — update `CHANGELOG.md` each release, `ROADMAP.md` as priorities shift.
+Not part of setup — run only when the user asks. **Step 18** (compatibility-date bumps, dependency updates, new content, dynamic pages, Workers Builds debugging, monitoring, docs upkeep) lives in `references/maintenance.md`; read it then.
 
 ---
 
 ## Verification
 
-`scripts/verify_site.py <url>` checks HTTPS + Cloudflare, security headers, immutable asset caching, OG/Twitter/canonical/JSON-LD, the CSP meta tag, the `og:image` resolves, sitemap, `robots.txt`, a real 404 status, the analytics beacon, and favicons. Add `--stealth` for the anonymity variant. Fix every `[FAIL]`; `[WARN]` is advisory.
+`python3 "${CLAUDE_SKILL_DIR}/scripts/verify_site.py" <url> [--stealth] [--local]` checks HTTPS + Cloudflare, security headers, immutable asset caching, OG/Twitter/canonical/JSON-LD, CSP (meta tag or header), that `og:image` resolves, sitemap, `robots.txt`, no leftover `noindex`, a real HTML 404, the analytics beacon and that the CSP allows it, and favicons. `--stealth` for the anonymity variant; `--local` for a `localhost` preview (skips the checks that need the live host). Fix every `[FAIL]`; `[WARN]` is advisory.
 
 ## Troubleshooting
 
@@ -567,8 +581,20 @@ For any error or unexpected symptom, consult **`references/pitfalls.md`** — a 
 
 ## Anonymity-first variant
 
-For a site that must not be discovered yet, follow **`references/anonymity-variant.md`** — defense-in-depth `noindex`, no sitemap/JSON-LD/OG, and a launch checklist. Announce to the user when this variant is active.
+For a site that must not be discovered yet, follow **`references/anonymity-variant.md`** — defense-in-depth `noindex`, no sitemap/JSON-LD/OG, a launch checklist, and the limits of stealth (a custom domain's TLS certificate is publicly logged within minutes). Announce to the user when this variant is active.
 
 ## Versions & sources
 
-Verified May 2026: Astro 6.3, `@astrojs/cloudflare` 13.5 (peer `wrangler ^4.83`), `wrangler` 4.93, `@astrojs/sitemap` 3.7, Node 22. On conflict prefer, in order: Astro adapter docs → Cloudflare Workers Static Assets docs → Cloudflare Workers Builds docs — query them live via the Cloudflare Documentation MCP and Context7.
+**Verified baseline** (2026-09-26) — the single source for version claims in this skill:
+
+| Package / runtime | Verified | Floor the skill needs |
+|---|---|---|
+| `astro` | 7.3.5 | ^7.2 (`session: false`) |
+| `@astrojs/cloudflare` | 14.3.3 | ^14.2 |
+| `wrangler` | 4.141.0 | ≥4.135 (Workers Previews) |
+| `create-astro` | 5.2.4 | 5.x (`--no-ai`) |
+| `@astrojs/sitemap` | 3.7.4 | 3.7 |
+| Node | 24 LTS (`.nvmrc`) | 22.12 |
+| Skill scripts | Python 3.9+ stdlib; `gen-images.mjs` runs on Node with the site's `sharp` | — |
+
+On conflict prefer, in order: Astro adapter docs → Cloudflare Workers Static Assets docs → Cloudflare Workers Builds docs — query them via the `astro-docs` / `cloudflare-docs` MCPs, Context7, or Cloudflare's `index.md` pages. Cloudflare's Astro framework guide still shows the pre-v13 `dist/_worker.js` layout for on-demand rendering; trust the Astro adapter docs over it.

@@ -1,31 +1,44 @@
 #!/usr/bin/env python3
-"""Preflight checker for Astro 6 + Cloudflare Workers site setup.
+"""Preflight checker for Astro + Cloudflare Workers site setup.
 
 Run this BEFORE starting the setup skill. It verifies every command-line tool
-and account you need for a full Astro 6 + Cloudflare Workers project, prints a
+and account you need for a full Astro + Cloudflare Workers project, prints a
 scannable report, and exits 0 only when all HARD requirements are satisfied.
 
 Design constraints (intentional):
   * Python 3 standard library ONLY -- this must run on a brand-new machine
-    with nothing installed but a Python 3.8+ interpreter.
-  * Cross-platform: macOS, Linux, Windows.
+    with nothing installed but a Python 3.9+ interpreter (the macOS system
+    python3 qualifies).
+  * Targets macOS and Linux (WSL2 on Windows). On native Windows it still runs
+    and reports, but warns that the setup expects WSL2.
   * No subprocess call may crash the script: a missing binary raises
     FileNotFoundError, which is caught everywhere, and every call has a short
     timeout so a hung tool cannot stall the report.
+  * Secrets are never printed: CLOUDFLARE_API_TOKEN is checked for presence
+    only.
 
 Exit codes:
   0  -- every hard requirement met (WARN-only is still 0)
   1  -- one or more hard requirements failed
 """
 
+import os
 import platform
 import re
 import subprocess
 import sys
 
-# Astro 6 requires Node.js 22 or newer. Astro dropped support for Node 18/20
-# starting with v6, so anything below 22 will fail at `npm create astro`.
-MIN_NODE_MAJOR = 22
+# Node.js floors, compared as (major, minor, patch) tuples -- never major alone.
+# Astro's bin/astro.mjs refuses to start below 22.12.0 (engines ">=22.12.0").
+# Some of Astro's transitive dependencies (e.g. undici) declare >=22.19.0, so
+# 22.12-22.18 works but prints npm EBADENGINE warnings on every install; that is
+# a WARN, not a FAIL. Node 24 LTS is the recommended version.
+MIN_NODE = (22, 12, 0)
+CLEAN_NODE = (22, 19, 0)
+RECOMMENDED_NODE_MAJOR = 24
+
+# The setup's other scripts (verify_site.py) need Python 3.9+.
+MIN_PYTHON = (3, 9)
 
 # Cap on every subprocess call. Version probes are instant; this only exists so
 # a misbehaving tool (e.g. one that opens a prompt) cannot hang the checker.
@@ -119,18 +132,26 @@ def run_command(args):
 # Platform-aware remediation text
 # --------------------------------------------------------------------------
 
-_SYSTEM = platform.system()  # 'Darwin', 'Linux', or 'Windows'.
+_RAW_SYSTEM = platform.system()  # 'Darwin', 'Linux', 'Windows', 'CYGWIN_NT-...'
+# Cygwin / MSYS / Git Bash report their own names but are still native Windows.
+_SYSTEM = (
+    "Windows"
+    if _RAW_SYSTEM.startswith(("CYGWIN", "MSYS", "MINGW"))
+    else _RAW_SYSTEM
+)
 
 
 def install_hint(tool):
     """Return an OS-specific install instruction for a given tool name."""
     hints = {
         "node": {
-            "Darwin": "Install Node 22+ from nodejs.org, or `brew install node`, "
-                      "or use nvm: `nvm install 22`.",
-            "Linux": "Install Node 22+ from nodejs.org, or use nvm: "
-                     "`nvm install 22` (distro packages are often outdated).",
-            "Windows": "Install Node 22+ from nodejs.org, or use nvm-windows.",
+            "Darwin": "Install Node 24 LTS: `nvm install 24`, or "
+                      "`brew install node@24` (then add it to PATH as brew "
+                      "prints).",
+            "Linux": "Install Node 24 LTS: `nvm install 24` (distro packages "
+                     "are often outdated), or see nodejs.org.",
+            "Windows": "Use WSL2, then install Node 24 LTS inside it: "
+                       "`nvm install 24`.",
         },
         "git": {
             "Darwin": "Install with `brew install git`, or from git-scm.com.",
@@ -190,14 +211,56 @@ class Report:
 # Individual checks
 # --------------------------------------------------------------------------
 
-def parse_first_int(text):
-    """Return the first integer found in `text`, or None if there is none."""
-    match = re.search(r"\d+", text)
-    return int(match.group()) if match else None
+def _fmt_version(parts):
+    """Format a version tuple as dotted text, e.g. (22, 12, 0) -> '22.12.0'."""
+    return ".".join(str(p) for p in parts)
+
+
+def parse_version(text):
+    """Return (major, minor, patch) from text like 'v22.16.0', or None.
+
+    Missing minor/patch components count as 0, so 'v24' parses as (24, 0, 0).
+    """
+    match = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", text)
+    if not match:
+        return None
+    return tuple(int(part or 0) for part in match.groups())
+
+
+def check_platform(report):
+    """Confirm the OS is one the setup supports.
+
+    macOS and Linux (including WSL2) pass. Native Windows is a WARN, not a
+    FAIL: the tools may all be present, but the setup's shell commands assume
+    a POSIX shell, so the fix is to re-run inside WSL2.
+    """
+    if _SYSTEM == "Windows":
+        detail = "native Windows"
+        if _RAW_SYSTEM != "Windows":
+            detail += f" ({_RAW_SYSTEM})"
+        print_line("WARN", "platform", detail)
+        print_remediation(
+            "This setup targets macOS/Linux. Install WSL2 (`wsl --install`), "
+            "then run the setup from inside the WSL2 Linux shell."
+        )
+        report.record("WARN")
+        return
+
+    label = _SYSTEM or "unknown"
+    if _SYSTEM == "Linux" and "microsoft" in platform.release().lower():
+        label = "Linux (WSL)"
+    if platform.machine():
+        label += f" ({platform.machine()})"
+    print_line("OK", "platform", label)
+    report.record("OK")
 
 
 def check_node(report):
-    """Verify Node.js is installed and at least version 22 (Astro 6 minimum)."""
+    """Verify Node.js is installed and new enough for Astro.
+
+    FAIL below 22.12.0 (Astro refuses to start), WARN below 22.19.0 (works,
+    with npm EBADENGINE warnings), otherwise OK.
+    """
     ok, output = run_command(["node", "--version"])
     if not ok:
         print_line("FAIL", "node", "not found on PATH")
@@ -206,8 +269,8 @@ def check_node(report):
         return
 
     version = output.strip()  # e.g. "v22.16.0"
-    major = parse_first_int(version)
-    if major is None:
+    parsed = parse_version(version)
+    if parsed is None:
         # node ran but produced something unparseable -- treat as a hard fail
         # rather than guessing.
         print_line("FAIL", "node", f"unrecognized version output: {version!r}")
@@ -215,15 +278,30 @@ def check_node(report):
         report.record("FAIL")
         return
 
-    if major < MIN_NODE_MAJOR:
-        print_line("FAIL", "node", f"{version} (need >= {MIN_NODE_MAJOR})")
+    if parsed < MIN_NODE:
+        print_line("FAIL", "node", f"{version} (need >= {_fmt_version(MIN_NODE)})")
         print_remediation(
-            f"Astro 6 requires Node {MIN_NODE_MAJOR}+. " + install_hint("node")
+            f"Astro requires Node {_fmt_version(MIN_NODE)}+. "
+            + install_hint("node")
         )
         report.record("FAIL")
         return
 
-    print_line("OK", "node", f"{version} (>= {MIN_NODE_MAJOR} required)")
+    if parsed < CLEAN_NODE:
+        print_line(
+            "WARN", "node",
+            f"{version} (works, but npm prints EBADENGINE warnings below "
+            f"{_fmt_version(CLEAN_NODE)})",
+        )
+        print_remediation(install_hint("node"))
+        report.record("WARN")
+        return
+
+    print_line(
+        "OK", "node",
+        f"{version} (>= {_fmt_version(MIN_NODE)} required; "
+        f"{RECOMMENDED_NODE_MAJOR} LTS recommended)",
+    )
     report.record("OK")
 
 
@@ -275,9 +353,18 @@ def check_gh(report):
     first_line = version_output.splitlines()[0] if version_output else "gh"
     version = first_line.replace("gh version", "").strip() or first_line
 
-    # Installed -- now confirm the user is logged in. `gh auth status` exits
-    # non-zero and prints to stderr (merged into stdout here) when not signed in.
-    auth_ok, auth_output = run_command(["gh", "auth", "status"])
+    # Installed -- now confirm the user is logged in to github.com. `gh auth
+    # status` exits non-zero and prints to stderr (merged into stdout here)
+    # when not signed in. `--active` limits the check to the account gh will
+    # actually use, so a stale secondary account cannot fail it. gh releases
+    # older than --active (2023) reject the flag; retry without it.
+    auth_ok, auth_output = run_command(
+        ["gh", "auth", "status", "--hostname", "github.com", "--active"]
+    )
+    if not auth_ok and "unknown flag" in auth_output:
+        auth_ok, auth_output = run_command(
+            ["gh", "auth", "status", "--hostname", "github.com"]
+        )
     if not auth_ok:
         print_line("FAIL", "gh", f"{version} -- installed but NOT authenticated")
         print_remediation("Sign in with `gh auth login` and choose GitHub.com.")
@@ -294,14 +381,21 @@ def check_gh(report):
 
 
 def parse_gh_login(auth_output):
-    """Extract the account login from `gh auth status` output, or None.
+    """Extract the active account login from `gh auth status` output, or None.
 
     The line looks like: 'Logged in to github.com account USERNAME (...)' on
     newer gh, or '... as USERNAME (...)' on older releases -- handle both.
+    When several accounts are listed (the no-`--active` fallback), prefer the
+    block marked 'Active account: true'; otherwise take the first login.
     """
-    match = re.search(r"account\s+(\S+)", auth_output)
-    if not match:
-        match = re.search(r"Logged in to \S+ as\s+(\S+)", auth_output)
+    pattern = r"Logged in to \S+ (?:account|as)\s+(\S+)"
+    blocks = re.split(r"(?=Logged in to )", auth_output)
+    for block in blocks:
+        if "Active account: true" in block:
+            match = re.search(pattern, block)
+            if match:
+                return match.group(1)
+    match = re.search(pattern, auth_output)
     return match.group(1) if match else None
 
 
@@ -309,6 +403,17 @@ def check_python(report):
     """Report the running interpreter. Trivially present (it is running this),
     so this is informational confirmation, never a failure."""
     version = platform.python_version()  # e.g. "3.14.3"
+    if sys.version_info[:2] < MIN_PYTHON:
+        print_line(
+            "FAIL", "python3",
+            f"{version} (need >= {_fmt_version(MIN_PYTHON)} for verify_site.py)",
+        )
+        print_remediation(
+            "Install a newer Python 3 (e.g. `brew install python` or your "
+            "distro's python3 package)."
+        )
+        report.record("FAIL")
+        return
     print_line("OK", "python3", f"{version} (this interpreter)")
     report.record("OK")
 
@@ -384,13 +489,26 @@ def report_cloudflare_account(report):
     """Report the Cloudflare account requirement.
 
     This genuinely CANNOT be auto-checked here: Wrangler (the Cloudflare CLI)
-    is not installed until later in the setup flow, so there is no local
-    credential to inspect. Print an INFO line so the user knows what is coming.
+    is not installed until later in the setup flow, so there is no credential
+    check to run. Print an INFO line so the user knows what is coming.
+
+    If CLOUDFLARE_API_TOKEN is set, wrangler authenticates with it and a
+    `wrangler login` would add a competing OAuth credential -- say so. This is
+    a presence check only: the value is never read beyond "non-empty", never
+    printed, and never validated here.
     """
+    if os.environ.get("CLOUDFLARE_API_TOKEN"):
+        print_line("INFO", "Cloudflare", "CLOUDFLARE_API_TOKEN is set")
+        print_remediation(
+            "wrangler will use it -- do not run `wrangler login`. "
+            "The account is confirmed at the deploy step."
+        )
+        return
+
     print_line("INFO", "Cloudflare", "account required -- verified later")
     print_remediation(
         "Cannot be checked now (Wrangler is installed during setup). "
-        "Sign up free at dash.cloudflare.com; you will run `wrangler login` "
+        "Sign up free at dash.cloudflare.com; you will sign in to wrangler "
         "at the deploy step."
     )
 
@@ -401,13 +519,13 @@ def report_cloudflare_account(report):
 
 def main():
     """Run all checks, print the report, and return the process exit code."""
-    print(_color("Astro 6 + Cloudflare Workers -- preflight check", "bold"))
-    print(f"Platform: {_SYSTEM or 'unknown'} ({platform.machine()})")
+    print(_color("Astro + Cloudflare Workers -- preflight check", "bold"))
 
     report = Report()
 
     # --- TOOLS -----------------------------------------------------------
     print_header("TOOLS")
+    check_platform(report)
     check_node(report)
     check_npm(report)
     check_git(report)
@@ -428,7 +546,7 @@ def main():
     summary = (
         f"{report.passed} passed, "
         f"{report.failed} failed, "
-        f"{report.warnings} warnings"
+        f"{report.warnings} warning{'' if report.warnings == 1 else 's'}"
     )
     if report.failed:
         print(_color(summary, "red"))
@@ -442,7 +560,7 @@ def main():
     if report.warnings:
         print(
             _color("Preflight passed", "green")
-            + " with warnings -- optional items above are missing but setup "
+            + " with warnings -- review the [WARN] items above; setup "
             "can proceed."
         )
     else:

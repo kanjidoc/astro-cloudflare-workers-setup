@@ -1,0 +1,12 @@
+# HSTS preload is opt-in only (hstspreload.org: "not recommended"; removal takes months).
+# Drop includeSubDomains if any subdomain is served over plain HTTP.
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+# The adapter already sends this for /_astro/*; kept as a fallback.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable

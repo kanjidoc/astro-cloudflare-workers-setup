@@ -1,25 +1,42 @@
 #!/usr/bin/env python3
 """
-verify_site.py — post-deploy verifier for Astro 6 + Cloudflare Workers sites.
+verify_site.py — verifier for Astro static sites on Cloudflare Workers.
 
-Fetches a live site and asserts it is correctly and canonically configured:
-HTTPS + Cloudflare edge, security headers, immutable hashed assets, OG/Twitter
-metadata, canonical link, JSON-LD, CSP meta tag, sitemap, robots.txt, a real
-custom 404, the Web Analytics beacon, and favicons.
+Fetches a live site (or a local preview) and asserts it is correctly and
+canonically configured: HTTPS + the http->https redirect + Cloudflare edge,
+security headers from public/_headers, immutable hashed assets, OG/Twitter
+metadata, canonical link, URLs on the served host (Astro `site`), JSON-LD, a
+Content-Security-Policy (meta tag or header), sitemap, robots.txt, a real
+custom 404 page, the Web Analytics beacon (and that the CSP allows it),
+favicons, and that a public site carries no stray noindex.
 
 Usage:
     python3 verify_site.py https://example.com
     python3 verify_site.py https://example.com --stealth
+    python3 verify_site.py --local http://localhost:4321
 
-The --stealth flag targets the "coming soon" / anonymity variant: it inverts
-the indexability expectations (expects a noindex robots meta tag, expects
-robots.txt to Disallow everything, expects NO sitemap) and downgrades the
-OG / JSON-LD checks to warnings.
+The --local flag checks a local `npm run preview` (workerd) before deploying:
+HTTPS, the Cloudflare edge, the served-host check, and fetches of absolute
+URLs on another host (the og:image on the production host) are reported as
+SKIP, not FAIL. Everything else (headers from _headers, CSP, 404, sitemap,
+robots, beacon, favicons) is checked. Only localhost URLs are accepted.
 
-Python 3.8+, standard library only. No third-party dependencies.
+The --stealth flag targets the "coming soon" / anonymity variant: it expects a
+noindex robots meta tag AND an `X-Robots-Tag: noindex` header, expects NO
+sitemap, and downgrades the OG / JSON-LD checks to warnings. robots.txt must
+stay crawlable: a `Disallow: /` for all agents is a WARN, because crawlers
+that cannot fetch a page never see its noindex.
+
+Exit codes:
+    0  no check failed (warnings may be present)
+    1  at least one check failed
+    2  invalid input, or the homepage could not be reached at all
+
+Python 3.9+, standard library only. No third-party dependencies.
 """
 
 import argparse
+import http.client
 import json
 import random
 import re
@@ -37,8 +54,8 @@ from html.parser import HTMLParser
 
 TIMEOUT = 15  # seconds, applied to every network call
 USER_AGENT = (
-    "Mozilla/5.0 (compatible; AstroCloudflareVerifier/1.0; "
-    "+https://github.com/) verify_site.py"
+    "Mozilla/5.0 (compatible; AstroCloudflareVerifier/2.0; "
+    "+https://github.com/kanjidoc/astro-cloudflare-workers-setup) verify_site.py"
 )
 MAX_REDIRECTS = 5
 
@@ -46,6 +63,10 @@ MAX_REDIRECTS = 5
 PASS = "PASS"
 FAIL = "FAIL"
 WARN = "WARN"
+SKIP = "SKIP"  # --local only: a check that cannot pass before deploy
+
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+BEACON_MARKER = "cloudflareinsights.com/beacon"
 
 
 # ---------------------------------------------------------------------------
@@ -98,8 +119,8 @@ class Results:
         if detail:
             line += " — {}".format(detail)
         print(line)
-        # Show a fix hint only for failures, indented under the line.
-        if status == FAIL and hint:
+        # Show a fix hint for failures and warnings, indented under the line.
+        if status in (FAIL, WARN) and hint:
             print("       {} {}".format(self.style.dim("hint:"), hint))
 
     def _marker(self, status):
@@ -107,6 +128,8 @@ class Results:
             return self.style.green("[PASS]")
         if status == FAIL:
             return self.style.red("[FAIL]")
+        if status == SKIP:
+            return self.style.dim("[SKIP]")
         return self.style.yellow("[WARN]")
 
     @property
@@ -120,6 +143,10 @@ class Results:
     @property
     def warnings(self):
         return sum(1 for s, _ in self.items if s == WARN)
+
+    @property
+    def skipped(self):
+        return sum(1 for s, _ in self.items if s == SKIP)
 
 
 # ---------------------------------------------------------------------------
@@ -145,10 +172,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
     A redirect handler that refuses to auto-follow 3xx responses.
 
     The default ``urllib.request.urlopen`` transparently follows redirects,
-    which would make a manual redirect loop dead code and would hide the true
-    status of a route from a check. Returning ``None`` from ``redirect_request``
-    tells urllib not to follow the redirect; the 3xx is then raised as an
-    ``HTTPError``, which ``fetch()`` turns into a normal Response.
+    which would hide the true status of a route from a check. Returning
+    ``None`` from ``redirect_request`` tells urllib not to follow the redirect;
+    the 3xx is then raised as an ``HTTPError``, which ``fetch()`` turns into a
+    normal Response.
     """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -160,26 +187,21 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def fetch(url, method="GET", follow_redirects=True):
+def fetch(url, method="GET", follow_redirects=True, extra_headers=None):
     """
     Fetch a URL and return a normalized Response, or raise on a network-level
-    failure (DNS, TLS, timeout, connection reset).
+    failure (DNS, TLS, timeout, connection reset, malformed URL).
 
     Redirects are never auto-followed by urllib here (see ``_NoRedirect``).
     Instead this function decides what to do with a 3xx:
 
-      * ``follow_redirects=True`` (default) -- follow redirects manually so we
-        can cap their number with ``MAX_REDIRECTS`` and still observe the final
-        status. This is what normal checks (homepage, assets, ...) want.
+      * ``follow_redirects=True`` (default) -- follow redirects manually, capped
+        by ``MAX_REDIRECTS``, and return the final response.
       * ``follow_redirects=False`` -- return the 3xx response as-is, so a caller
-        can observe that a route redirected. ``check_custom_404`` needs this to
-        tell a real 404 apart from a redirect to the index page.
+        can observe that a route redirected (the 404 and http->https checks).
 
     HTTP error statuses (404, 500, ...) are always returned as a Response, not
-    raised.
-
-    TLS uses urllib's default verified context (via the shared opener), so an
-    invalid certificate still raises a network-level error as before.
+    raised. TLS uses urllib's default verified context.
     """
     current = url
     seen_redirects = 0
@@ -188,19 +210,20 @@ def fetch(url, method="GET", follow_redirects=True):
         request = urllib.request.Request(current, method=method)
         request.add_header("User-Agent", USER_AGENT)
         request.add_header("Accept", "*/*")
+        for key, value in (extra_headers or {}).items():
+            request.add_header(key, value)
 
         try:
             with _OPENER.open(request, timeout=TIMEOUT) as resp:
                 raw = resp.read()
-                body = _decode(raw)
                 return Response(
-                    resp.status, list(resp.getheaders()), body, resp.geturl()
+                    resp.status, list(resp.getheaders()), _decode(raw),
+                    resp.geturl()
                 )
         except urllib.error.HTTPError as err:
-            # Because _NoRedirect refuses to auto-follow, every 3xx arrives here
-            # as an HTTPError. When following is requested we chase the Location
-            # header manually, capped by MAX_REDIRECTS; otherwise we return the
-            # 3xx unchanged so the caller can see it.
+            # Every 3xx arrives here (see _NoRedirect). When following is
+            # requested, chase the Location header manually; otherwise return
+            # the 3xx unchanged so the caller can see it.
             is_redirect = err.code in (301, 302, 303, 307, 308)
             if (
                 follow_redirects
@@ -228,6 +251,24 @@ def _decode(raw):
         except UnicodeDecodeError:
             continue
     return raw.decode("utf-8", errors="replace")
+
+
+def get_path(ctx, path):
+    """
+    Fetch a same-site path once per run and cache it (robots.txt and the
+    sitemap are read by more than one check). Re-raises a cached fetch error.
+    """
+    cache = ctx.setdefault("_cache", {})
+    if path not in cache:
+        url = urllib.parse.urljoin(ctx["base"], path)
+        try:
+            cache[path] = (fetch(url), None)
+        except Exception as err:  # network-dependent
+            cache[path] = (None, err)
+    resp, err = cache[path]
+    if err is not None:
+        raise err
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -325,26 +366,140 @@ def is_absolute_https(value):
     return parsed.scheme == "https" and bool(parsed.netloc)
 
 
+def host_of(url):
+    """Lower-cased hostname of a URL, or '' if it has none."""
+    return urllib.parse.urlparse((url or "").strip()).hostname or ""
+
+
+def served_host(ctx):
+    """The host the homepage was actually served from (after redirects)."""
+    return host_of(ctx["home"].final_url if ctx["home"] else ctx["base"])
+
+
+def off_host(ctx, url):
+    """--local only: the host of an absolute URL that is not the served host."""
+    if not ctx["local"]:
+        return None
+    host = host_of(url)
+    return host if host and host != host_of(ctx["base"]) else None
+
+
 def max_age_seconds(cache_control):
     """Extract the max-age value (seconds) from a Cache-Control header."""
     match = re.search(r"max-age\s*=\s*(\d+)", cache_control, re.IGNORECASE)
     return int(match.group(1)) if match else None
 
 
+def has_noindex(value):
+    """True if a robots meta / X-Robots-Tag value contains noindex (or none)."""
+    tokens = re.split(r"[\s,:]+", (value or "").lower())
+    return "noindex" in tokens or "none" in tokens
+
+
+def robots_meta_values(head):
+    """Content of every robots / googlebot meta tag in the <head>."""
+    if head is None:
+        return []
+    return [
+        m.get("content", "") for m in head.metas
+        if m.get("name", "").lower() in ("robots", "googlebot")
+    ]
+
+
+def csp_policies(ctx):
+    """
+    Every enforced CSP on the homepage as (source, policy) pairs: the
+    `Content-Security-Policy` response header and/or the meta tag. Browsers
+    enforce all of them, so a resource must be allowed by each one.
+    """
+    policies = []
+    resp, head = ctx["home"], ctx["head"]
+    if resp is not None and resp.header("content-security-policy"):
+        policies.append(("header", resp.header("content-security-policy")))
+    if head is not None:
+        for meta in head.metas:
+            if (meta.get("http-equiv", "").lower() == "content-security-policy"
+                    and meta.get("content")):
+                policies.append(("meta", meta["content"]))
+    return policies
+
+
+def csp_directive(policy, name):
+    """Lower-cased source list of one CSP directive, or None if absent."""
+    for part in policy.split(";"):
+        tokens = part.strip().split()
+        if tokens and tokens[0].lower() == name:
+            return [t.lower() for t in tokens[1:]]
+    return None
+
+
+def csp_allows_host(sources, host):
+    """True if a CSP source list admits an https URL on `host`."""
+    return any(host in t or t in ("https:", "*") for t in sources)
+
+
+def robots_groups(text):
+    """
+    Parse robots.txt into {agent: [(rule, path), ...]}, MERGING the rules of
+    every group that names the same agent (RFC 9309). Agent names compare
+    case-insensitively. Cloudflare's managed robots.txt prepends its own
+    `User-Agent: *` group, so a first-group-only parser would miss the site's.
+    """
+    groups, agents, last = {}, [], None
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if ":" not in line:
+            continue
+        key, value = [s.strip() for s in line.split(":", 1)]
+        key = key.lower()
+        if key == "user-agent":
+            if last != "ua":
+                agents = []
+            agents.append(value.lower())
+            last = "ua"
+            for agent in agents:
+                groups.setdefault(agent, [])
+        elif key in ("allow", "disallow") and agents:
+            for agent in agents:
+                groups[agent].append((key, value))
+            last = "rule"
+    return groups
+
+
+def robots_blocks_all(text):
+    """True if the merged `*` group disallows the whole site."""
+    star = robots_groups(text).get("*", [])
+    whole = ("/", "/*")
+    return (any(k == "disallow" and v in whole for k, v in star)
+            and not any(k == "allow" and v in whole for k, v in star))
+
+
+def looks_like_html(body):
+    head = (body or "").lstrip().lower()
+    return head.startswith("<!doctype html") or head.startswith("<html")
+
+
 # ---------------------------------------------------------------------------
 # Individual checks
 #
-# Each check is wrapped by run_check() so a thrown exception is converted into
-# a FAIL rather than aborting the whole verification run.
+# Each check returns (status, name[, detail[, hint]]) and is wrapped by
+# run_check() so a thrown exception becomes a FAIL instead of aborting the run.
 # ---------------------------------------------------------------------------
 
 def check_homepage(ctx):
-    """Check 1: homepage returns HTTP 200 over HTTPS."""
+    """Homepage returns HTTP 200 over HTTPS."""
     resp = ctx["home"]
     if resp is None:
         return (FAIL, "Homepage reachable over HTTPS",
                 "could not fetch homepage",
                 "confirm the site is deployed and the domain resolves")
+    if ctx["local"]:
+        if resp.status != 200:
+            return (FAIL, "Homepage returns 200 (local)",
+                    "got HTTP {}".format(resp.status),
+                    "the homepage route should return 200")
+        return (PASS, "Homepage returns 200 (local; HTTPS checked after "
+                "deploy)", resp.final_url)
     if not resp.final_url.startswith("https://"):
         return (FAIL, "Homepage reachable over HTTPS",
                 "final URL is not https: " + resp.final_url,
@@ -356,12 +511,36 @@ def check_homepage(ctx):
     return (PASS, "Homepage returns 200 over HTTPS", resp.final_url)
 
 
+def check_https_redirect(ctx):
+    """Plain http:// on the served host redirects to https:// (advisory)."""
+    name = "HTTP redirects to HTTPS"
+    if ctx["local"]:
+        return (SKIP, name, "not checkable before deploy")
+    host = served_host(ctx)
+    try:
+        resp = fetch("http://{}/".format(host), follow_redirects=False)
+    except Exception as err:  # network-dependent
+        return (WARN, name, "could not fetch http://{}/: {}".format(host, err))
+    location = resp.header("location")
+    if 300 <= resp.status < 400 and location.lower().startswith("https://"):
+        if resp.status in (301, 308):
+            return (PASS, name, "HTTP {} -> {}".format(resp.status, location))
+        return (WARN, name,
+                "HTTP {} (temporary) -> {}".format(resp.status, location),
+                "prefer a permanent 301/308 redirect to HTTPS")
+    return (WARN, name,
+            "http://{}/ returned HTTP {} without an https redirect"
+            .format(host, resp.status),
+            "turn on Always Use HTTPS for the zone (SSL/TLS -> Edge "
+            "Certificates); HSTS only protects repeat visits")
+
+
 def check_cloudflare(ctx):
-    """Check 2: the `server` header identifies Cloudflare."""
+    """The `server` header identifies Cloudflare."""
+    if ctx["local"]:
+        return (SKIP, "Served by Cloudflare", "not checkable before deploy")
     resp = ctx["home"]
     if resp is None:
-        # No response at all: the right diagnosis is "unreachable", not a
-        # misleading "(missing) server header" — there is no header to inspect.
         return (FAIL, "Served by Cloudflare", "homepage is unreachable",
                 "confirm the site is deployed and the domain resolves")
     server = resp.header("server")
@@ -373,10 +552,15 @@ def check_cloudflare(ctx):
 
 
 def check_security_headers(ctx):
-    """Check 3: required security headers are present on the homepage."""
+    """
+    Required security headers are present on the homepage. A CSP *header*
+    with frame-ancestors stands in for X-Frame-Options (a meta CSP can't carry
+    frame-ancestors). Legacy X-XSS-Protection and HSTS preload are WARNs.
+    """
+    name = "Security headers present"
     resp = ctx["home"]
     if resp is None:
-        return (FAIL, "Security headers present", "no homepage response",
+        return (FAIL, name, "no homepage response",
                 "homepage must be reachable")
 
     required = {
@@ -395,73 +579,91 @@ def check_security_headers(ctx):
         elif expected_substr and expected_substr not in value.lower():
             wrong.append("{} should contain {!r}".format(header, expected_substr))
 
+    xfo_note = ""
+    if ("x-frame-options" in missing and csp_directive(
+            resp.header("content-security-policy"), "frame-ancestors")
+            is not None):
+        missing.remove("x-frame-options")
+        xfo_note = " (frame-ancestors in the CSP header replaces X-Frame-Options)"
+
+    advisories = []
+    xxss = resp.header("x-xss-protection").strip()
+    if xxss and not xxss.startswith("0"):
+        advisories.append("X-XSS-Protection is {!r}: remove it or set '0' "
+                          "(the legacy filter can introduce XSS)".format(xxss))
+    if "preload" in resp.header("strict-transport-security").lower():
+        advisories.append("HSTS has 'preload': opt-in only — remove it unless "
+                          "you mean to submit to hstspreload.org (removal "
+                          "takes months)")
+
     if missing or wrong:
         problems = []
         if missing:
             problems.append("missing: " + ", ".join(missing))
-        if wrong:
-            problems.append("; ".join(wrong))
-        return (FAIL, "Security headers present", " / ".join(problems),
-                "add these headers via the Cloudflare adapter, a _headers "
-                "file, or middleware")
-    return (PASS, "Security headers present", "all 5 headers found")
+        problems.extend(wrong)
+        problems.extend(advisories)
+        return (FAIL, name, " / ".join(problems),
+                "add them to the `/*` block of public/_headers (the adapter "
+                "and middleware can't set headers on prerendered pages)")
+    if advisories:
+        return (WARN, name, " / ".join(advisories),
+                "edit the `/*` block of public/_headers")
+    return (PASS, name, "all 5 headers found" + xfo_note)
 
 
 def check_hashed_asset(ctx):
     """
-    Check 4: a content-hashed /_astro/ asset is served with an immutable,
-    long-lived Cache-Control header.
+    A content-hashed /_astro/ asset (css, js, image or font, including srcset
+    entries) is served with an immutable, long-lived Cache-Control header.
     """
+    name = "Hashed asset is immutable & long-cached"
     resp = ctx["home"]
     if resp is None or not resp.body:
-        return (FAIL, "Hashed asset is immutable & long-cached",
-                "no homepage HTML to scan",
+        return (FAIL, name, "no homepage HTML to scan",
                 "homepage must be reachable")
 
     # Targeted regex: locate one hashed asset URL referenced by the homepage.
-    # This deliberately does not parse the whole DOM.
     match = re.search(
-        r'["\'(]([^"\'()\s]*?/_astro/[^"\'()\s]+?\.(?:css|js))(?:["\'?)]|$)',
-        resp.body,
+        r'(?:["\'(,]|\s)((?:https?://[^/"\'\s]+)?/_astro/[^"\'()\s,?#]+'
+        r'\.[a-z0-9]{2,5})(?=[\s"\'?#),]|$)',
+        resp.body, re.IGNORECASE,
     )
     if not match:
-        return (WARN, "Hashed asset is immutable & long-cached",
-                "no /_astro/*.css or *.js asset referenced on the homepage")
+        return (WARN, name,
+                "no hashed /_astro/ asset referenced on the homepage — nothing "
+                "to verify (normal for a JS-free page without <Image>/fonts)")
 
     asset_url = urllib.parse.urljoin(resp.final_url, match.group(1))
     try:
         asset = fetch(asset_url)
-    except Exception as err:  # pragma: no cover - network dependent
-        return (FAIL, "Hashed asset is immutable & long-cached",
-                "could not fetch {}: {}".format(asset_url, err),
+    except Exception as err:  # network-dependent
+        return (FAIL, name, "could not fetch {}: {}".format(asset_url, err),
                 "ensure /_astro/ assets are deployed")
 
     if asset.status != 200:
-        return (FAIL, "Hashed asset is immutable & long-cached",
-                "asset returned HTTP {}".format(asset.status),
+        return (FAIL, name,
+                "{} returned HTTP {}".format(asset_url, asset.status),
                 "the hashed asset should return 200")
 
     cache_control = asset.header("cache-control")
     age = max_age_seconds(cache_control)
     if "immutable" not in cache_control.lower():
-        return (FAIL, "Hashed asset is immutable & long-cached",
+        return (FAIL, name,
                 "Cache-Control lacks 'immutable': {!r}".format(cache_control),
                 "serve /_astro/* with 'Cache-Control: public, max-age=31536000, "
-                "immutable' (these files are content-hashed)")
+                "immutable' (add it to public/_headers)")
     if age is None or age < 86400:
-        return (FAIL, "Hashed asset is immutable & long-cached",
+        return (FAIL, name,
                 "max-age is too short: {!r}".format(cache_control),
                 "use a long max-age (e.g. 31536000) for content-hashed assets")
-    return (PASS, "Hashed asset is immutable & long-cached",
-            "max-age={}, immutable".format(age))
+    return (PASS, name, "max-age={}, immutable".format(age))
 
 
 def check_open_graph(ctx):
     """
-    Check 5: Open Graph tags present; og:url and og:image must be absolute
-    https URLs, and og:image must actually resolve (HTTP 200 with an image
-    Content-Type). A 404'd OG image is a real defect, so it FAILs in standard
-    mode. Downgraded to WARN-only in stealth mode.
+    Open Graph tags present; og:url and og:image must be absolute https URLs,
+    and og:image must actually resolve (HTTP 200 with an image Content-Type).
+    Downgraded to WARN-only in stealth mode.
     """
     fail_status = WARN if ctx["stealth"] else FAIL
     name = "Open Graph tags"
@@ -490,10 +692,11 @@ def check_open_graph(ctx):
                 "og:url and og:image must be absolute https:// URLs, not "
                 "relative paths")
 
-    # The og:image URL must actually resolve. A social card pointing at a
-    # missing image renders blank when the page is shared, so verify it loads
-    # and is genuinely an image (200 + Content-Type starting "image/").
+    # A social card pointing at a missing image renders blank when shared.
     og_image = found["og:image"].strip()
+    if off_host(ctx, og_image):
+        return (SKIP, name, "all 4 tags present and absolute; og:image is on "
+                "{}, not checkable before deploy".format(off_host(ctx, og_image)))
     try:
         image = fetch(og_image)
     except Exception as err:
@@ -516,7 +719,7 @@ def check_open_graph(ctx):
 
 
 def check_twitter_card(ctx):
-    """Check 6: twitter:card meta tag present. WARN-only in stealth mode."""
+    """twitter:card meta tag present. WARN-only in stealth mode."""
     fail_status = WARN if ctx["stealth"] else FAIL
     head = ctx["head"]
     if head is None:
@@ -531,7 +734,7 @@ def check_twitter_card(ctx):
 
 
 def check_canonical(ctx):
-    """Check 7: <link rel="canonical"> present and absolute."""
+    """<link rel="canonical"> present and absolute."""
     head = ctx["head"]
     if head is None:
         return (FAIL, "Canonical link", "no homepage HTML to parse",
@@ -549,10 +752,86 @@ def check_canonical(ctx):
             "add a canonical link tag to the <head>")
 
 
+def check_site_host(ctx):
+    """
+    canonical, og:url, og:image, the robots.txt `Sitemap:` line and the
+    sitemap's first <loc> all use the host the site is served from — i.e.
+    Astro's `site` was updated after attaching the custom domain. WARN (not
+    FAIL) when served from *.workers.dev, where `site` may already name the
+    custom domain. SKIP with --local.
+    """
+    name = "URLs use the served host (Astro `site`)"
+    if ctx["local"]:
+        return (SKIP, name, "not checkable before deploy")
+    head = ctx["head"]
+    if head is None or ctx["home"] is None:
+        return (FAIL, name, "no homepage HTML to parse",
+                "homepage must be reachable")
+    served = served_host(ctx)
+
+    urls = []  # (label, url, strict)
+    for link in head.links:
+        if "canonical" in link.get("rel", "").lower().split():
+            urls.append(("canonical", link.get("href", ""), True))
+    for prop in ("og:url", "og:image"):
+        meta = find_meta(head.metas, prop=prop)
+        if meta and meta.get("content"):
+            # An og:image on a CDN host is legitimate; one on *.workers.dev is
+            # the classic leftover from before the custom domain.
+            urls.append((prop, meta["content"], prop == "og:url"))
+    if not ctx["stealth"]:
+        try:
+            robots = get_path(ctx, "/robots.txt")
+            if robots.status == 200 and not looks_like_html(robots.body):
+                for line in robots.body.splitlines():
+                    key, _, value = line.partition(":")
+                    if key.strip().lower() == "sitemap" and value.strip():
+                        urls.append(("robots.txt Sitemap", value.strip(), True))
+        except Exception:
+            pass
+        try:
+            sitemap = get_path(ctx, "/sitemap-index.xml")
+            loc = re.search(r"<loc>\s*([^<\s]+)\s*</loc>", sitemap.body or "")
+            if sitemap.status == 200 and loc:
+                urls.append(("sitemap <loc>", loc.group(1), True))
+        except Exception:
+            pass
+
+    urls = [(label, url, strict) for label, url, strict in urls if host_of(url)]
+    if not urls:
+        return (WARN, name, "no canonical, og or sitemap URLs to compare")
+
+    strict_wrong, soft_wrong = [], []
+    for label, url, strict in urls:
+        host = host_of(url)
+        if host == served:
+            continue
+        entry = "{} -> {}".format(label, host)
+        if strict or host.endswith(".workers.dev"):
+            strict_wrong.append(entry)
+        else:
+            soft_wrong.append(entry)
+
+    hint = ("set `site` in astro.config.mjs to https://{} and rebuild/redeploy"
+            .format(served))
+    if strict_wrong:
+        status = WARN if served.endswith(".workers.dev") else FAIL
+        detail = "served from {} but {}".format(
+            served, "; ".join(strict_wrong + soft_wrong))
+        if status == WARN:
+            detail += " (expected before the custom domain is live)"
+        return (status, name, detail, hint)
+    if soft_wrong:
+        return (WARN, name,
+                "{} (fine if that host is your image CDN)"
+                .format("; ".join(soft_wrong)), hint)
+    return (PASS, name, "{} URL(s) use {}".format(len(urls), served))
+
+
 def check_json_ld(ctx):
     """
-    Check 8: a <script type="application/ld+json"> block exists and contains
-    valid JSON. WARN-only in stealth mode.
+    A <script type="application/ld+json"> block exists and contains valid
+    JSON. WARN-only in stealth mode.
     """
     fail_status = WARN if ctx["stealth"] else FAIL
     head = ctx["head"]
@@ -580,39 +859,61 @@ def check_json_ld(ctx):
             "{} valid block(s)".format(len(ld_blocks)))
 
 
-def check_csp_meta(ctx):
+def check_csp(ctx):
     """
-    Check 9: a <meta http-equiv="content-security-policy"> tag is present.
-    Astro 6 delivers CSP via a meta tag for static pages served through the
-    Cloudflare adapter.
+    A Content-Security-Policy is delivered, as a response header or a <meta
+    http-equiv> tag (Astro emits the meta tag for prerendered pages). When one
+    exists, WARN if no policy sets object-src (or a restrictive default-src)
+    or base-uri.
     """
-    head = ctx["head"]
-    if head is None:
-        return (FAIL, "CSP meta tag", "no homepage HTML to parse",
+    name = "Content-Security-Policy"
+    if ctx["home"] is None:
+        return (FAIL, name, "no homepage response",
                 "homepage must be reachable")
-    meta = find_meta(head.metas, http_equiv="content-security-policy")
-    if meta and meta.get("content"):
-        return (PASS, "CSP meta tag", "content-security-policy present")
-    return (FAIL, "CSP meta tag",
-            "no <meta http-equiv=\"content-security-policy\"> found",
-            "set `security: { csp: true }` in astro.config so Astro emits a "
-            "CSP meta tag (build + preview — CSP is inactive in dev)")
+    policies = csp_policies(ctx)
+    if not policies:
+        return (FAIL, name,
+                "no CSP header and no <meta http-equiv=\"content-security-"
+                "policy\"> found",
+                "set `security: { csp: { directives: [\"object-src 'none'\", "
+                "\"base-uri 'self'\"] } }` in astro.config.mjs (CSP appears "
+                "after build/preview; it is inactive in dev)")
+
+    sources = sorted({src for src, _ in policies})
+    has_object = any(
+        csp_directive(p, "object-src") is not None
+        or "*" not in (csp_directive(p, "default-src") or ["*"])
+        for _, p in policies
+    )
+    has_base = any(csp_directive(p, "base-uri") is not None
+                   for _, p in policies)
+    lacking = []
+    if not has_object:
+        lacking.append("object-src")
+    if not has_base:
+        lacking.append("base-uri")
+    if lacking:
+        return (WARN, name,
+                "CSP ({}) lacks {}".format(" + ".join(sources),
+                                           " and ".join(lacking)),
+                "add \"object-src 'none'\" and \"base-uri 'self'\" to "
+                "security.csp.directives in astro.config.mjs")
+    return (PASS, name, "present ({})".format(" + ".join(sources)))
 
 
 def check_sitemap(ctx):
     """
-    Check 10: /sitemap-index.xml returns 200 and looks like XML.
-    In stealth mode the expectation is inverted: a 404 is acceptable.
+    /sitemap-index.xml returns 200 and is real sitemap XML.
+    In stealth mode the expectation is inverted: a 404 is expected.
     """
-    url = urllib.parse.urljoin(ctx["base"], "/sitemap-index.xml")
     try:
-        resp = fetch(url)
+        resp = get_path(ctx, "/sitemap-index.xml")
     except Exception as err:
         if ctx["stealth"]:
             return (PASS, "Sitemap absent (stealth)",
                     "sitemap-index.xml not reachable, as expected")
         return (FAIL, "Sitemap present",
-                "could not fetch {}: {}".format(url, err),
+                "could not fetch /sitemap-index.xml: {}".format(err),
                 "generate a sitemap with @astrojs/sitemap")
 
     if ctx["stealth"]:
@@ -621,126 +922,240 @@ def check_sitemap(ctx):
                     "sitemap-index.xml returns 404, as expected")
         return (WARN, "Sitemap absent (stealth)",
                 "sitemap-index.xml returned HTTP {} — a stealth site should "
-                "not expose a sitemap".format(resp.status))
+                "not expose a sitemap".format(resp.status),
+                "remove sitemap() from astro.config.mjs integrations")
 
+    problem = sitemap_problem(resp, "sitemap-index.xml")
+    if problem is None:
+        return (PASS, "Sitemap present",
+                "sitemap-index.xml is a valid sitemap")
+
+    # Not a site this skill generated (@astrojs/sitemap writes
+    # sitemap-index.xml)? Honor a same-host `Sitemap:` URL from robots.txt.
+    alt = robots_sitemap_url(ctx)
+    if alt:
+        try:
+            alt_resp = get_path(ctx, alt)
+        except Exception:
+            alt_resp = None
+        if alt_resp is not None and sitemap_problem(alt_resp, alt) is None:
+            return (PASS, "Sitemap present",
+                    "{} (from robots.txt) is a valid sitemap".format(alt))
+    return (FAIL, "Sitemap present", problem[0], problem[1])
+
+
+def sitemap_problem(resp, label):
+    """None if `resp` is real sitemap XML, else (detail, hint)."""
     if resp.status != 200:
-        return (FAIL, "Sitemap present",
-                "sitemap-index.xml returned HTTP {}".format(resp.status),
+        return ("{} returned HTTP {}".format(label, resp.status),
                 "add @astrojs/sitemap and set the `site` config")
-
-    # A misconfigured server can answer /sitemap-index.xml with an HTML error
-    # page at HTTP 200. Merely "starts with <" is not enough — require a real
-    # sitemap root element (<sitemapindex> or <urlset>) and explicitly reject a
-    # body whose root looks like HTML.
-    body_lower = resp.body.lower()
-    body_head = body_lower.lstrip()
-    if body_head.startswith("<!doctype html") or body_head.startswith("<html"):
-        return (FAIL, "Sitemap present",
-                "sitemap-index.xml served an HTML page, not a sitemap",
-                "sitemap-index.xml should be an XML sitemap index, not HTML "
-                "(a 200 HTML page here usually means the route fell through "
-                "to index.html)")
+    # A misconfigured server can answer with an HTML page at HTTP 200, so
+    # require a real sitemap root element and reject an HTML body.
+    if looks_like_html(resp.body):
+        return ("{} served an HTML page, not a sitemap".format(label),
+                "a 200 HTML page here usually means the route fell through "
+                "to index.html — generate the sitemap with @astrojs/sitemap")
+    body_lower = (resp.body or "").lower()
     if "<sitemapindex" not in body_lower and "<urlset" not in body_lower:
-        return (FAIL, "Sitemap present",
-                "response has no <sitemapindex> or <urlset> root element",
-                "sitemap-index.xml should be valid sitemap XML — generate it "
+        return ("{} has no <sitemapindex> or <urlset> root element"
+                .format(label),
+                "the sitemap should be valid sitemap XML — generate it "
                 "with @astrojs/sitemap")
-    return (PASS, "Sitemap present", "sitemap-index.xml is a valid sitemap")
+    return None
+
+
+def robots_sitemap_url(ctx):
+    """The path of the first same-host `Sitemap:` URL in robots.txt, or None."""
+    try:
+        robots = get_path(ctx, "/robots.txt")
+    except Exception:
+        return None
+    if robots.status != 200 or looks_like_html(robots.body):
+        return None
+    for line in (robots.body or "").splitlines():
+        key, _, value = line.partition(":")
+        if key.strip().lower() != "sitemap" or not value.strip():
+            continue
+        parsed = urllib.parse.urlparse(value.strip())
+        if parsed.hostname and parsed.hostname.lower() == served_host(ctx):
+            path = parsed.path or "/"
+            if path == "/sitemap-index.xml":
+                return None
+            return path + ("?" + parsed.query if parsed.query else "")
+    return None
 
 
 def check_robots(ctx):
     """
-    Check 11: /robots.txt returns 200.
-    In stealth mode it must additionally contain `Disallow: /`.
+    /robots.txt returns 200 and is judged by its merged `*` group (per-bot
+    groups such as those Cloudflare's managed robots.txt prepends are ignored).
+    Standard: FAIL if `*` is blocked from the whole site; WARN without a
+    `Sitemap:` line. Stealth: WARN if `*` is blocked (crawlers then never see
+    the noindex layers), PASS if crawlable.
     """
-    url = urllib.parse.urljoin(ctx["base"], "/robots.txt")
+    name = "robots.txt"
     try:
-        resp = fetch(url)
+        resp = get_path(ctx, "/robots.txt")
     except Exception as err:
-        return (FAIL, "robots.txt", "could not fetch {}: {}".format(url, err),
+        return (FAIL, name, "could not fetch /robots.txt: {}".format(err),
                 "add a public/robots.txt file")
 
     if resp.status != 200:
-        return (FAIL, "robots.txt",
-                "robots.txt returned HTTP {}".format(resp.status),
+        return (FAIL, name, "robots.txt returned HTTP {}".format(resp.status),
                 "add a public/robots.txt file")
+    if looks_like_html(resp.body):
+        return (FAIL, name, "robots.txt served an HTML page",
+                "add a plain-text public/robots.txt (the route fell through "
+                "to an HTML page)")
+
+    blocks_all = robots_blocks_all(resp.body)
+    has_sitemap = re.search(r"^\s*sitemap\s*:", resp.body,
+                            re.IGNORECASE | re.MULTILINE) is not None
 
     if ctx["stealth"]:
-        body_lower = resp.body.lower()
-        # Match a Disallow rule covering the whole site.
-        if re.search(r"^\s*disallow:\s*/\s*$", body_lower, re.MULTILINE):
-            return (PASS, "robots.txt disallows all (stealth)",
-                    "robots.txt contains 'Disallow: /'")
-        return (FAIL, "robots.txt disallows all (stealth)",
-                "robots.txt does not contain 'Disallow: /'",
-                "a stealth site's robots.txt should disallow all crawling")
-    return (PASS, "robots.txt", "robots.txt returns 200")
+        if blocks_all:
+            return (WARN, name + " (stealth)",
+                    "`User-agent: *` is disallowed from the whole site, so "
+                    "crawlers never see the noindex meta/header",
+                    "use `User-agent: *` / `Allow: /` and let the noindex "
+                    "layers do the work")
+        if has_sitemap:
+            return (WARN, name + " (stealth)",
+                    "crawlable, but it advertises a Sitemap: line",
+                    "remove the Sitemap: line from public/robots.txt")
+        return (PASS, name + " (stealth)",
+                "crawlable; the noindex layers keep it out of search")
+
+    if blocks_all:
+        return (FAIL, name,
+                "`User-agent: *` is disallowed from the whole site "
+                "(Disallow: /) — search engines can't crawl it",
+                "remove `Disallow: /` from public/robots.txt (leftover from "
+                "the stealth variant?)")
+    if not has_sitemap:
+        return (WARN, name, "returns 200 but has no Sitemap: line",
+                "add `Sitemap: https://<domain>/sitemap-index.xml` to "
+                "public/robots.txt")
+    return (PASS, name, "returns 200, crawlable, lists a sitemap")
 
 
 def check_custom_404(ctx):
     """
-    Check 12: a path that cannot exist returns a real 404 (not 200, not a
-    redirect).
+    A path that cannot exist returns a real 404 carrying the custom HTML page.
 
-    Redirects must NOT be followed here: if the request is fetched with
-    follow_redirects=True, a misconfigured server that 302s every unknown route
-    to "/" would look like a 200 homepage and the true status would be hidden.
-    So this calls fetch(..., follow_redirects=False) and inspects the immediate
-    status:
-
-      * 404            -> PASS (correct not_found_handling)
-      * 200 or any 3xx -> FAIL (both mean not_found_handling is misconfigured:
-                          the unknown URL is being served, or bounced, instead
-                          of returning a genuine 404)
+    The first request does not follow redirects, so a server that bounces
+    every unknown route to "/" can't masquerade as a 200 homepage. One
+    same-host redirect (trailing slash, canonical host) is followed; the chain
+    must end in 404. An assets-only Worker without `not_found_handling`
+    returns a 404 with an empty body, so the body must be HTML.
     """
+    name = "Custom 404 page"
+    hint_nfh = ("add src/pages/404.astro and set \"not_found_handling\": "
+                "\"404-page\" under assets in wrangler.jsonc")
+    nav = {"Accept": "text/html", "Sec-Fetch-Mode": "navigate"}
     token = "{:08x}".format(random.getrandbits(32))
     url = urllib.parse.urljoin(ctx["base"], "/__verify_nonexistent_" + token)
     try:
-        resp = fetch(url, follow_redirects=False)
+        resp = fetch(url, follow_redirects=False, extra_headers=nav)
     except Exception as err:
-        return (FAIL, "Custom 404 handling",
-                "could not fetch {}: {}".format(url, err),
+        return (FAIL, name, "could not fetch {}: {}".format(url, err),
                 "the site must respond to unknown routes")
 
-    if resp.status == 404:
-        return (PASS, "Custom 404 handling",
-                "unknown route correctly returns 404")
-    if resp.status == 200:
-        return (FAIL, "Custom 404 handling",
-                "unknown route returned 200 instead of 404",
-                "set `not_found_handling = \"404-page\"` in Wrangler assets "
-                "config — a 200 here means every unknown URL serves index.html")
+    via = ""
     if 300 <= resp.status < 400:
-        return (FAIL, "Custom 404 handling",
-                "unknown route returned a redirect (HTTP {}) instead of 404"
-                .format(resp.status),
-                "set `not_found_handling = \"404-page\"` in Wrangler assets "
-                "config — an unknown URL should 404, not redirect")
-    return (FAIL, "Custom 404 handling",
-            "unknown route returned HTTP {}".format(resp.status),
-            "unknown routes should return a 404 status")
+        location = urllib.parse.urljoin(url, resp.header("location"))
+        if not resp.header("location") or host_of(location) != host_of(url):
+            return (FAIL, name,
+                    "unknown route redirected (HTTP {}) to {}".format(
+                        resp.status, location or "(no Location)"),
+                    "an unknown URL should 404, not redirect — " + hint_nfh)
+        first_status = resp.status
+        try:
+            resp = fetch(location, follow_redirects=False, extra_headers=nav)
+        except Exception as err:
+            return (FAIL, name, "could not fetch {}: {}".format(location, err),
+                    "the site must respond to unknown routes")
+        via = "redirect (HTTP {}, trailing-slash/canonical) then ".format(
+            first_status)
+
+    if resp.status == 404:
+        body = resp.body.lower()
+        if "<html" in body or "<!doctype html" in body:
+            return (PASS, name, via + "404 with the custom HTML page")
+        return (FAIL, name, via + "404 but with an empty/non-HTML body",
+                hint_nfh)
+    if resp.status == 200:
+        return (FAIL, name, via + "unknown route returned 200 instead of 404",
+                "a 200 here means every unknown URL serves a page (SPA "
+                "fallback?) — " + hint_nfh)
+    if 300 <= resp.status < 400:
+        return (FAIL, name,
+                via + "unknown route redirected again (HTTP {})".format(
+                    resp.status),
+                "an unknown URL should 404, not redirect — " + hint_nfh)
+    return (FAIL, name, via + "unknown route returned HTTP {}".format(
+        resp.status), "unknown routes should return a 404 status")
 
 
 def check_analytics_beacon(ctx):
     """
-    Check 13: the Cloudflare Web Analytics beacon is present in the homepage
-    HTML. Analytics is optional, so a miss is a WARN, never a FAIL.
+    The Cloudflare Web Analytics beacon is on the homepage exactly once AND
+    every CSP on the page lets it load (script-src) and report (connect-src).
+    A missing beacon is a WARN (analytics is optional); a beacon the CSP
+    blocks is a FAIL (it silently records nothing).
     """
+    name = "Cloudflare Web Analytics beacon"
     resp = ctx["home"]
     body = resp.body if resp else ""
-    if "cloudflareinsights.com/beacon" in body:
-        return (PASS, "Cloudflare Web Analytics beacon",
-                "beacon script present")
-    return (WARN, "Cloudflare Web Analytics beacon",
-            "no cloudflareinsights.com/beacon script found — add the Web "
-            "Analytics snippet if you want traffic stats (auto-inject is "
-            "Pages-only; on Workers add the snippet manually)")
+    count = body.count(BEACON_MARKER)
+    if count == 0:
+        return (WARN, name, "no cloudflareinsights.com/beacon script found",
+                "for traffic stats, add the manual JS snippet (works on "
+                "*.workers.dev and custom domains; if automatic setup is also "
+                "enabled for this zone, turn it off for this hostname so the "
+                "beacon isn't loaded twice)")
+
+    for source, policy in csp_policies(ctx):
+        script = (csp_directive(policy, "script-src-elem")
+                  or csp_directive(policy, "script-src")
+                  or csp_directive(policy, "default-src"))
+        if script is not None:
+            if "'strict-dynamic'" in script:
+                return (FAIL, name,
+                        "beacon present but the CSP ({}) uses 'strict-dynamic'"
+                        " — host allowlists are ignored and the parser-"
+                        "inserted beacon is blocked".format(source),
+                        "remove 'strict-dynamic' from the CSP")
+            if not csp_allows_host(script, "cloudflareinsights.com"):
+                return (FAIL, name,
+                        "beacon present but the CSP ({}) script-src blocks "
+                        "static.cloudflareinsights.com".format(source),
+                        "add 'https://static.cloudflareinsights.com' to "
+                        "security.csp.scriptDirective.resources (keep "
+                        "\"'self'\" in the list) in astro.config.mjs")
+        connect = (csp_directive(policy, "connect-src")
+                   or csp_directive(policy, "default-src"))
+        if connect is not None and not csp_allows_host(
+                connect, "cloudflareinsights.com"):
+            return (FAIL, name,
+                    "beacon present but the CSP ({}) connect-src blocks "
+                    "cloudflareinsights.com, so it can't report"
+                    .format(source),
+                    "add 'https://cloudflareinsights.com' to connect-src")
+
+    if count > 1:
+        return (WARN, name,
+                "beacon appears {} times (manual snippet + automatic "
+                "setup?) — only one per page is supported".format(count),
+                "turn off automatic setup for this hostname in Web Analytics, "
+                "or remove the manual snippet")
+    return (PASS, name, "beacon present and allowed by the CSP")
 
 
 def check_favicons(ctx):
     """
-    Check 14: favicon.svg, favicon.ico and apple-touch-icon.png each return
-    200. Any miss is a WARN, never a FAIL.
+    favicon.svg, favicon.ico and apple-touch-icon.png each return 200. Any
+    miss is a WARN, never a FAIL.
     """
     targets = ["/favicon.svg", "/favicon.ico", "/apple-touch-icon.png"]
     missing = []
@@ -759,51 +1174,75 @@ def check_favicons(ctx):
     return (PASS, "Favicons", "all 3 icon files return 200")
 
 
+def check_indexable(ctx):
+    """
+    Standard mode only: a public site carries no stray noindex (robots meta or
+    X-Robots-Tag), e.g. left over from the stealth variant. WARN instead of
+    FAIL on *.workers.dev, where a noindex header is deliberate.
+    """
+    name = "Indexable (no stray noindex)"
+    resp, head = ctx["home"], ctx["head"]
+    if resp is None:
+        return (FAIL, name, "homepage unreachable",
+                "homepage must be reachable")
+    problems = []
+    for content in robots_meta_values(head):
+        if has_noindex(content):
+            problems.append("robots meta: " + content)
+    xrt = resp.header("x-robots-tag")
+    if has_noindex(xrt):
+        problems.append("X-Robots-Tag: " + xrt)
+    if not problems:
+        return (PASS, name, "no noindex on the homepage")
+    if served_host(ctx).endswith(".workers.dev"):
+        return (WARN, name, "; ".join(problems) + " (on *.workers.dev — fine "
+                "if deliberate)",
+                "the custom domain must not carry this noindex")
+    return (FAIL, name, "; ".join(problems),
+            "remove the stealth noindex layers before launch (robots meta in "
+            "the layout, X-Robots-Tag in public/_headers) — see the "
+            "anonymity-variant launch checklist")
+
+
 def check_robots_meta(ctx):
     """
-    Stealth-only check: the homepage <head> must carry a robots meta tag with
+    Stealth-only: the homepage <head> carries a robots meta tag with
     `noindex` so search engines do not index the coming-soon site.
     """
+    name = "Noindex robots meta (stealth)"
     head = ctx["head"]
     if head is None:
-        return (FAIL, "Noindex robots meta (stealth)",
-                "no homepage HTML to parse", "homepage must be reachable")
-    meta = find_meta(head.metas, name="robots")
-    content = meta.get("content", "").lower() if meta else ""
-    if "noindex" in content:
-        return (PASS, "Noindex robots meta (stealth)",
-                "robots meta = " + content)
-    return (FAIL, "Noindex robots meta (stealth)",
+        return (FAIL, name, "no homepage HTML to parse",
+                "homepage must be reachable")
+    values = robots_meta_values(head)
+    for content in values:
+        if has_noindex(content):
+            return (PASS, name, "robots meta = " + content)
+    return (FAIL, name,
             "no <meta name=\"robots\" content=\"noindex\"> found"
-            + (" (content: {!r})".format(content) if content else ""),
+            + (" (content: {!r})".format(", ".join(values)) if values else ""),
             "add <meta name=\"robots\" content=\"noindex, nofollow\"> so the "
             "stealth site is not indexed")
 
 
 def check_xrobots_header(ctx):
     """
-    Stealth-only check: the homepage HTTP response must carry an
-    `X-Robots-Tag` header containing `noindex`.
-
-    This is the defense-in-depth companion to the noindex robots meta tag — the
-    header keeps a stealth site out of search indexes even for responses a
-    crawler fetches without parsing the HTML (and for non-HTML routes). This
-    check is skipped entirely in standard mode (it is never added to the check
-    list there).
+    Stealth-only: the homepage response carries an `X-Robots-Tag` header
+    containing `noindex` — the defense-in-depth companion to the robots meta
+    tag, honored even when a crawler doesn't parse the HTML.
     """
+    name = "X-Robots-Tag header (stealth)"
     resp = ctx["home"]
     if resp is None:
-        return (FAIL, "X-Robots-Tag header (stealth)",
-                "homepage is unreachable", "homepage must be reachable")
+        return (FAIL, name, "homepage is unreachable",
+                "homepage must be reachable")
     value = resp.header("x-robots-tag")
-    if "noindex" in value.lower():
-        return (PASS, "X-Robots-Tag header (stealth)",
-                "X-Robots-Tag: " + value)
-    return (FAIL, "X-Robots-Tag header (stealth)",
+    if has_noindex(value):
+        return (PASS, name, "X-Robots-Tag: " + value)
+    return (FAIL, name,
             "X-Robots-Tag header {}".format(
                 "is {!r}".format(value) if value else "is missing"),
-            "send an `X-Robots-Tag: noindex` HTTP response header (e.g. via a "
-            "_headers file or the Cloudflare adapter) for the stealth site")
+            "add `X-Robots-Tag: noindex` to the `/*` block of public/_headers")
 
 
 # ---------------------------------------------------------------------------
@@ -820,7 +1259,7 @@ def run_check(results, func, ctx):
         detail = rest[0] if len(rest) > 0 else ""
         hint = rest[1] if len(rest) > 1 else ""
         results.record(status, name, detail, hint)
-    except Exception as err:  # pragma: no cover - defensive catch-all
+    except Exception as err:  # defensive catch-all
         results.record(
             FAIL,
             getattr(func, "__name__", "check"),
@@ -833,72 +1272,139 @@ def run_check(results, func, ctx):
 # Main
 # ---------------------------------------------------------------------------
 
-def normalize_url(raw):
-    """Ensure the target URL has an https scheme and no surrounding noise."""
+def normalize_url(raw, default_scheme="https"):
+    """
+    Add a scheme if missing and validate the URL. Returns None when the input
+    is not a usable site URL (a non-http(s) scheme, no hostname, whitespace,
+    bad port).
+    """
     url = raw.strip()
+    if (re.match(r"^[a-z][a-z0-9+.-]*://", url, re.IGNORECASE)
+            and not re.match(r"^https?://", url, re.IGNORECASE)):
+        return None
     if not re.match(r"^https?://", url, re.IGNORECASE):
-        url = "https://" + url
+        url = "{}://{}".format(default_scheme, url)
+    if re.search(r"\s", url):
+        return None
+    try:
+        parsed = urllib.parse.urlparse(url)
+        parsed.port  # raises ValueError on a malformed port
+    except ValueError:
+        return None
+    if not parsed.hostname:
+        return None
     return url
 
 
-def build_context(base_url, stealth):
+def build_context(base_url, stealth, local=False):
     """
-    Fetch the homepage once and assemble the context dict shared by all checks.
-    A single homepage fetch keeps the run fast and consistent.
+    Fetch the homepage once and assemble the context dict shared by all
+    checks. `base` is rebased on where the homepage actually landed (scheme +
+    host), so sub-requests don't hit a redirecting host. Returns
+    (ctx, fetch_error).
     """
     home = None
+    error = None
     try:
         home = fetch(base_url)
-    except (urllib.error.URLError, socket.timeout, ssl.SSLError, OSError) as err:
-        print("  (homepage fetch failed: {})".format(err))
+    except (urllib.error.URLError, socket.timeout, ssl.SSLError, OSError,
+            ValueError, http.client.HTTPException) as err:
+        error = err
+
+    base = base_url
+    if home is not None:
+        parsed = urllib.parse.urlparse(home.final_url)
+        if parsed.scheme and parsed.netloc:
+            base = "{}://{}/".format(parsed.scheme, parsed.netloc)
 
     head = parse_head(home.body) if (home and home.body) else None
-    return {
-        "base": base_url,
+    ctx = {
+        "base": base,
         "stealth": stealth,
+        "local": local,
         "home": home,
         "head": head,
     }
+    return ctx, error
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Post-deploy verifier for Astro 6 + Cloudflare Workers "
-                    "sites.",
+        description="Verifier for Astro static sites on Cloudflare Workers: "
+                    "a live URL, or a local preview with --local.",
+        epilog="Exit codes: 0 = no check failed; 1 = a check failed; "
+               "2 = invalid URL or the homepage could not be reached.",
     )
     parser.add_argument("url", help="Site URL, e.g. https://example.com")
     parser.add_argument(
         "--stealth",
         action="store_true",
-        help="Verify the anonymity / coming-soon variant: expect noindex, "
-             "robots Disallow: /, and no sitemap; OG and JSON-LD become "
-             "warnings.",
+        help="Verify the anonymity / coming-soon variant: expect a noindex "
+             "robots meta + X-Robots-Tag header and no sitemap; robots.txt "
+             "should stay crawlable (WARN if it disallows everything); OG and "
+             "JSON-LD become warnings.",
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Check a local `npm run preview` (http://localhost:<port>) "
+             "before deploying; HTTPS, Cloudflare-edge, served-host and "
+             "other-host checks are reported as SKIP.",
     )
     args = parser.parse_args(argv)
 
     style = Style(sys.stdout.isatty())
-    base_url = normalize_url(args.url)
+    base_url = normalize_url(args.url, "http" if args.local else "https")
+    if base_url is None:
+        print("error: not a valid site URL: {!r}".format(args.url))
+        return 2
+    if args.local and host_of(base_url) not in LOCAL_HOSTS:
+        print("--local expects a localhost URL (e.g. the one `npm run "
+              "preview` prints), got {}".format(args.url))
+        return 2
 
     mode = "stealth / coming-soon" if args.stealth else "standard / public"
+    if args.local:
+        mode += ", local preview (pre-deploy)"
     print(style.bold("Verifying {}".format(base_url)))
     print(style.dim("Mode: {}".format(mode)))
     print("")
 
-    ctx = build_context(base_url, args.stealth)
+    ctx, error = build_context(base_url, args.stealth, args.local)
+    if ctx["home"] is None:
+        if args.local:
+            print("Nothing answered at {} — run `npm run build && npm run "
+                  "preview` and pass the URL it prints.".format(base_url))
+            return 2
+        reason = str(getattr(error, "reason", error))
+        print(style.red("Cannot reach {} — {}".format(base_url, reason)))
+        if "CERTIFICATE_VERIFY_FAILED" in reason:
+            print("  If the site's certificate is valid, this Python lacks CA "
+                  "certificates: on a python.org macOS install run "
+                  "\"/Applications/Python 3.x/Install Certificates.command\", "
+                  "or use /usr/bin/python3.")
+        else:
+            print("  Check the URL, that the site is deployed, and that DNS "
+                  "has propagated.")
+        return 2
+    if host_of(ctx["base"]) != host_of(base_url):
+        print(style.dim("Note: {} redirected to {}; checking that host.".format(
+            base_url, ctx["base"])))
+        print("")
     results = Results(style)
 
-    # Ordered list of checks. The stealth-only robots-meta check is appended
-    # only when --stealth is set.
     checks = [
         check_homepage,
+        check_https_redirect,
         check_cloudflare,
         check_security_headers,
         check_hashed_asset,
         check_open_graph,
         check_twitter_card,
         check_canonical,
+        check_site_host,
         check_json_ld,
-        check_csp_meta,
+        check_csp,
         check_sitemap,
         check_robots,
         check_custom_404,
@@ -908,19 +1414,27 @@ def main(argv=None):
     if args.stealth:
         checks.append(check_robots_meta)
         checks.append(check_xrobots_header)
+    else:
+        checks.append(check_indexable)
 
     for check in checks:
         run_check(results, check, ctx)
 
     # Summary.
     print("")
-    summary = "{} passed, {} failed, {} warnings".format(
-        results.passed, results.failed, results.warnings
+    summary = "{} passed, {} failed, {} warning{}".format(
+        results.passed, results.failed, results.warnings,
+        "" if results.warnings == 1 else "s",
     )
+    if results.skipped:
+        summary += ", {} skipped until deploy".format(results.skipped)
     print(style.bold(summary))
 
     if results.failed == 0:
         verdict = "VERDICT: site looks correctly configured."
+        if args.local:
+            verdict = ("VERDICT: local build looks correct; re-run against "
+                       "the live URL after deploy.")
         if results.warnings:
             verdict += " (review the warnings above)"
         print(style.green(verdict))

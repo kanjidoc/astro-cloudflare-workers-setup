@@ -10,7 +10,7 @@
     {
       "name": "astro-cloudflare-workers-setup",
       "source": "./",
-      "description": "Take an Astro static site from an empty folder to a live, auto-deploying site on Cloudflare Workers — GitHub repo, first deploy, custom domain, CI/CD, SEO, accessibility, and maintenance."
+      "description": "Take an Astro static site from an empty folder to a live, auto-deploying site on Cloudflare Workers — GitHub repo, first deploy, custom domain, Workers Builds CI/CD, SEO, security headers, accessibility, and maintenance."
     }
   ]
 }

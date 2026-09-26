@@ -1,0 +1,14 @@
+/* src/styles/global.css — site styles. Add your design here. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+img,
+picture,
+svg {
+  max-width: 100%;
+  height: auto;
+}
