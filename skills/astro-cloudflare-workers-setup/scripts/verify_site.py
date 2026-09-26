@@ -528,9 +528,15 @@ def check_https_redirect(ctx):
         return (WARN, name,
                 "HTTP {} (temporary) -> {}".format(resp.status, location),
                 "prefer a permanent 301/308 redirect to HTTPS")
-    return (WARN, name,
-            "http://{}/ returned HTTP {} without an https redirect"
-            .format(host, resp.status),
+    detail = "http://{}/ returned HTTP {} without an https redirect".format(
+        host, resp.status)
+    if host.endswith(".workers.dev"):
+        # workers.dev has no zone settings; nothing for the user to turn on.
+        return (WARN, name, detail,
+                "expected on *.workers.dev (not configurable); HSTS covers "
+                "repeat visits. A custom domain can redirect via Always Use "
+                "HTTPS")
+    return (WARN, name, detail,
             "turn on Always Use HTTPS for the zone (SSL/TLS -> Edge "
             "Certificates); HSTS only protects repeat visits")
 
