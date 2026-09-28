@@ -80,13 +80,18 @@ In Claude Code, just say what you want, for example *"set up a new Astro website
 |---|---|
 | `skills/astro-cloudflare-workers-setup/SKILL.md` | The skill: a five-phase, by-the-book setup guide. |
 | `.../scripts/preflight.py` | Checks that your machine has the right tools before you start. |
-| `.../scripts/verify_site.py` | Verifies a site's headers, SEO, CSP, 404 page and more. It checks a live URL, or a local preview with `--local`. |
+| `.../scripts/verify_site.py` | Verifies a site's headers, SEO, CSP, 404 page and more. It checks a live URL, or a local preview with `--local`; `--gated` checks a passkey-private site. |
 | `.../scripts/gen-images.mjs` | Builds `favicon.ico`, `apple-touch-icon.png` and `og.webp` from your site's SVG mark. |
 | `.../references/` | A symptom → fix troubleshooting table and the stealth / coming-soon variant. |
 | `.../assets/site/` | Config files that are identical for every site (editor, Prettier, Node version, headers, Dependabot, MCP, permissions). |
 | `.../assets/CLAUDE.md.template` | The project guide the skill writes into each new site. |
+| `skills/astro-cloudflare-passkey-login/` | A second skill: makes a finished site private with passkey-only sign-in (WebAuthn, Workers KV sessions, invite links, a Worker gate). Unstyled lock page; free plan only. |
 
 The Python scripts use only the standard library, so there's nothing to install. `gen-images.mjs` uses the image library (`sharp`) that your Astro project already has.
+
+## Making a site private
+
+Say "make my site private" or "add passkey login" in a site this plugin built. The `astro-cloudflare-passkey-login` skill adds a Worker that runs before every request, serves an unstyled lock page to anyone without a session, and lets exactly the people you name sign in with passkeys. No passwords, no identity provider, nothing to pay for. You invite each person with a single-use link from `npm run invite -- <name>`, and revoke a device with `npm run auth:revoke`. The site's `verify` script keeps checking that the gate is in place, and `verify_site.py --gated` checks it live.
 
 ## Notes
 

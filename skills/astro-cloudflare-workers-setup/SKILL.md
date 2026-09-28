@@ -583,6 +583,10 @@ For any error or unexpected symptom, consult **`references/pitfalls.md`** — a 
 
 For a site that must not be discovered yet, follow **`references/anonymity-variant.md`** — defense-in-depth `noindex`, no sitemap/JSON-LD/OG, a launch checklist, and the limits of stealth (a custom domain's TLS certificate is publicly logged within minutes). Announce to the user when this variant is active.
 
+## Making a site private
+
+Not part of setup. Once the site is live on its custom domain, the sibling skill **`astro-cloudflare-passkey-login`** adds passkey-only sign-in (a Worker gate, KV sessions, invite links). Don't improvise auth inside this skill; hand off to it.
+
 ## Versions & sources
 
 **Verified baseline** (2026-09-26) — the single source for version claims in this skill:

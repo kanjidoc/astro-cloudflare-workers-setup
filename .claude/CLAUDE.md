@@ -4,7 +4,7 @@ Guidance for Claude Code when working in **this repository**, the repo that *dev
 
 ## What this repo is
 
-A **Claude Code skill** packaged as an installable **plugin**. The skill, `astro-cloudflare-workers-setup`, guides Claude Code from an empty folder to a live, auto-deploying Astro static site on Cloudflare Workers.
+A Claude Code **plugin** with two skills: `astro-cloudflare-workers-setup` guides Claude Code from an empty folder to a live, auto-deploying Astro static site on Cloudflare Workers; `astro-cloudflare-passkey-login` takes such a live site and makes it private with passkey-only sign-in.
 
 It's published (public, MIT) at **https://github.com/kanjidoc/astro-cloudflare-workers-setup**. This repo is the source of truth; the skill is edited here.
 
@@ -26,7 +26,7 @@ skills/
     SKILL.md         — the skill: a 5-phase (A–E), ~18-step setup guide
     scripts/
       preflight.py   — checks the user's machine for required tools
-      verify_site.py — verifies a site: <url> [--stealth] [--local]
+      verify_site.py — verifies a site: <url> [--stealth] [--gated] [--local]
       gen-images.mjs — favicon.ico, apple-touch-icon.png, og.webp from the mark
     references/
       pitfalls.md            — symptom → fix troubleshooting table
@@ -36,6 +36,17 @@ skills/
     assets/
       CLAUDE.md.template     — project guide the skill writes into new sites
       site/                  — files identical for every site, copied once at Step 8
+  astro-cloudflare-passkey-login/      ← THE SECOND SKILL — live site → private site
+    SKILL.md         — preconditions, inputs, 12 steps, completion
+    references/
+      technical-design.md    — the ported design: architecture, KV model, flows, gate, threat model, verified facts
+      pitfalls.md            — symptom → fix table
+      resume.md              — evidence one-liner + rules for picking up a half-done run
+    assets/
+      site/                  — the auth/gate code, byte-identical for every site (copied at its Step 3)
+      templates/             — per-site files Claude fills: auth.ts, allowlist.ts, lock/invite pages,
+                               wrangler additions, the CLAUDE.md section
+docs/superpowers/   — design specs and implementation plans (not shipped as context)
 README.md  LICENSE
 ```
 
@@ -109,6 +120,14 @@ These came out of several rounds of multi-agent review, cold end-to-end re-tests
 - committing `extraKnownMarketplaces`/`enabledPlugins` or the Builds MCP into generated sites;
 - HSTS `preload` by default.
 
+## The passkey-login skill
+
+- **Provenance.** `assets/site/` is a de-branded copy of the private sign-in built on twofabianos (`feat/private-sign-in`, commit `<hash recorded at Task 4>`). Allowed differences: cookie names `__Host-auth-*`, event `auth:state`, `src/data/auth.ts` as a template, allowlist without `/sw.js`, `/og-v1.png`, `/brand/**`, with `/og.webp`. Any other difference is a porting bug. To update, re-copy from twofabianos and re-apply the renames (Task 4 of `docs/superpowers/plans/2026-09-28-passkey-login-skill.md`).
+- **No `scripts/` of its own.** It calls the setup skill's `verify_site.py --gated` by sibling path (`${CLAUDE_SKILL_DIR}/../astro-cloudflare-workers-setup/scripts/`), which holds because both skills ship in one plugin.
+- **Principles:** private = noindex on every response, OG kept so link previews work; the gate lives in the Worker entry, not middleware (middleware runs at build time for prerendered pages); ≥1 on-demand route always (an all-prerendered build silently drops `main`; the build guard enforces it); the `previews` block is required (Previews inherit nothing); the Worker sets headers itself (`_headers` doesn't apply to Worker-generated responses); fail closed; public by extension, never by directory; unstyled lock page; every setup invariant kept (`output: 'static'`, `session: false`, `imageService: 'compile'`, meta CSP, `not_found_handling`, no HSTS `preload`).
+- **Rejected:** Cloudflare Access, a password gate, Better Auth / Auth.js, Lucia, Playwright in generated sites, path-prefix gating, `secrets.required`, challenges in KV, a `returnTo` parameter.
+- **Testing:** the verifier fixture is in the plan (Task 1); the cold test is Task 6: a scratch site from the setup skill's Phase A, then this skill's Steps 1–7, then the negative build-guard run. On-invoke cost: about 4.7k tokens (2.1.0).
+
 **Watch:** Cloudflare's `cf` CLI (1.0.0-beta.1 as of Sept 2026) is beta, keeps a second credential store, and is slated to merge into wrangler. Don't adopt it. Revisit when it reaches GA or lands inside wrangler.
 
 ## Testing a change
@@ -133,7 +152,7 @@ Paths below are relative to `skills/astro-cloudflare-workers-setup/`.
   claude plugin validate . --strict                           # marketplace manifest
   claude plugin validate .claude-plugin/plugin.json --strict  # plugin: manifest, skills, root files
   ```
-  Then run `claude --plugin-dir . plugin details astro-cloudflare-workers-setup` to watch the on-invoke token cost (v1 was about 15.5k; v2.0 is about 19.3k after moving the resume map and Phase E into references, mostly the inline Step 13 Layout block and rationale bullets, which are the first places to trim). `claude plugin eval` is available if an `evals/` suite is added.
+  Then run `claude --plugin-dir . plugin details astro-cloudflare-workers-setup` to watch each skill's on-invoke token cost (v1 was about 15.5k; v2.0 is about 19.3k after moving the resume map and Phase E into references, mostly the inline Step 13 Layout block and rationale bullets, which are the first places to trim). `claude plugin eval` is available if an `evals/` suite is added.
 - **The procedure:** if you change the setup steps, have a fresh agent run **Phase A (Steps 1–9)** under `claude --plugin-dir <repo>` in a throwaway **empty** temp directory. Nothing may exist in the folder before the scaffold. Phase A needs no accounts and ends with `npm run verify`: 0 errors, `Complete!`, `No bindings found.`
 - Phases B–E need real GitHub/Cloudflare accounts and a browser, so review them rather than running them.
 
@@ -141,7 +160,7 @@ Paths below are relative to `skills/astro-cloudflare-workers-setup/`.
 
 Release from `main`.
 
-1. **Bump `version`** in `.claude-plugin/plugin.json` (semver). **No bump = nobody receives it**, the owner included: the manifest version pins every user's cache. Bump the major when the stated floors or the generated project's shape change.
+1. **Bump `version`** in `.claude-plugin/plugin.json` (semver). **No bump = nobody receives it**, the owner included: the manifest version pins every user's cache. Bump the major when the stated floors or the generated project's shape change; the minor when a skill is added.
 2. **Validate:** `claude plugin validate . --strict && claude plugin validate .claude-plugin/plugin.json --strict`.
 3. **Commit and push.**
 4. **Tag:** `claude plugin tag --push` from the repo root.

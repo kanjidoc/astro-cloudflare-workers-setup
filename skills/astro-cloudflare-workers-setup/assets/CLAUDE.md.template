@@ -52,6 +52,7 @@ Live at **https://<canonical-domain>**. Auto-deploys from GitHub on every push t
 - **Dependencies** — Dependabot groups `astro`, `@astrojs/*`, `wrangler` and `@cloudflare/*` into one weekly PR; merge it once its Preview build passes. For an Astro major, run `npx @astrojs/upgrade --dry-run` first and follow the upgrade guide; keep dependency bumps in their own commits.
 - **Custom domains** — declared in `wrangler.jsonc` `routes` with `workers_dev: true`. A code 100117 DNS conflict needs manual record deletion in the Cloudflare dashboard.
 - **Browser/auth steps** — dashboard configuration, and `wrangler login` when `npx wrangler whoami` shows no credential, must be done by the human.
+- **Make the site private** (passkey sign-in, no passwords) — run the `astro-cloudflare-passkey-login` skill from the plugin. It needs the custom domain live first.
 
 ## Knowledge & memory policy
 
