@@ -1,0 +1,30 @@
+// The public allowlist (technical design §7.2). GET/HEAD only; the Worker checks the method.
+// Exact paths only, plus the lock/invite pages' styles, scripts and fonts by extension.
+// Images under /_astro/ are never public: private images processed by Astro land there.
+// Consequence: private content must never be baked into JS or CSS.
+
+const PUBLIC_FILES = new Set([
+  '/favicon.svg',
+  '/favicon.ico',
+  '/apple-touch-icon.png',
+  '/robots.txt',
+  '/og.webp',
+  // Exact paths the lock page needs (a logo, say). Never a directory, never a wildcard.
+  // '<extra-public-path>',
+]);
+
+const SEGMENT = '[A-Za-z0-9_-][A-Za-z0-9_.-]*';
+/** `/_astro/<file>.css|js` (top level) and `/_astro/**\/<file>.woff2`. */
+const ASTRO_CODE = new RegExp(`^/_astro/${SEGMENT}\\.(?:css|js)$`);
+const ASTRO_FONT = new RegExp(`^/_astro/(?:${SEGMENT}/)*${SEGMENT}\\.woff2$`);
+
+export function isPublicPath(pathname: string): boolean {
+  if (PUBLIC_FILES.has(pathname)) return true;
+  if (
+    pathname.includes('..') ||
+    pathname.includes('%') ||
+    pathname.includes('//')
+  )
+    return false;
+  return ASTRO_CODE.test(pathname) || ASTRO_FONT.test(pathname);
+}

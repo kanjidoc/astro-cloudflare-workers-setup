@@ -1,0 +1,44 @@
+// Merge these keys into the site's wrangler.jsonc with targeted edits (never rewrite the file).
+// <apex> = the custom domain from routes[].pattern; <backup-host> = <name>.<subdomain>.workers.dev.
+// <kv-id> / <preview-kv-id> come from Step 8 (`wrangler kv namespace create`); leave the `id`
+// keys out until then — build, preview and the dry run work without ids, only a real deploy needs them.
+{
+  // Custom entry: the gate runs before every request (run_worker_first). See src/worker.ts.
+  "main": "./src/worker.ts",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": true,
+  },
+  "kv_namespaces": [{ "binding": "AUTH_KV", "id": "<kv-id>" }],
+  "ratelimits": [
+    {
+      "name": "AUTH_RATE_LIMIT",
+      "namespace_id": "1001",
+      "simple": { "limit": 10, "period": 60 },
+    },
+  ],
+  "vars": {
+    "RP_ID": "<apex>",
+    "ORIGIN": "https://<apex>",
+    "BACKUP_HOST": "<backup-host>",
+  },
+  // Worker Previews inherit no vars or bindings. Previews get their own KV namespace and can
+  // only ever show the lock page (the RP ID can't match a preview host).
+  "previews": {
+    "vars": {
+      "RP_ID": "<apex>",
+      "ORIGIN": "https://<apex>",
+      "BACKUP_HOST": "<backup-host>",
+    },
+    "kv_namespaces": [{ "binding": "AUTH_KV", "id": "<preview-kv-id>" }],
+    "ratelimits": [
+      {
+        "name": "AUTH_RATE_LIMIT",
+        "namespace_id": "1002",
+        "simple": { "limit": 10, "period": 60 },
+      },
+    ],
+  },
+}

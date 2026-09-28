@@ -1,0 +1,28 @@
+// Who can sign in, and the sign-in copy. Edit words here, not in page markup.
+// Names are lowercase [a-z0-9-], 1–32 chars: they are KV keys and cookie values.
+
+export const USERS = ['<user-1>', '<user-2>'] as const;
+export type User = (typeof USERS)[number];
+
+export function isUser(value: unknown): value is User {
+  return (
+    typeof value === 'string' && (USERS as readonly string[]).includes(value)
+  );
+}
+
+export const authCopy = {
+  lockHeading: 'Sign in',
+  unlockLabel: 'Unlock with passkey',
+  inviteHeading: 'Hi {name}',
+  registerLabel: 'Save my passkey',
+  failure: "That didn't work. Try again?",
+  inviteUnavailable: 'This invite has already been used or has expired.',
+  menu: 'Menu',
+  signOut: 'Sign out',
+  greeting: 'Hi {name}',
+} as const;
+
+/** Fills a `{name}` template from `authCopy`, e.g. `withName(authCopy.greeting, 'ana')` → "Hi ana". */
+export function withName(template: string, name: User): string {
+  return template.replace('{name}', name);
+}
