@@ -50,7 +50,6 @@ src/lib/gate/{classify,headers,redirect,arrival}.ts
 src/pages/auth/{session,signout}.ts
 src/pages/auth/signin/{options,verify}.ts
 src/pages/auth/invite/{options,verify}.ts
-src/pages/invite/[token].astro          functional, unstyled, hooks only
 src/scripts/{hooks,auth-flow,signout,arrival}.ts
 scripts/auth/{kv,invite,list,revoke}.mjs
 tests/build-guard.test.ts
@@ -62,9 +61,9 @@ tests/unit/**                            the pure-helper suites and tests/unit/h
 
 | Template | Becomes | Per-site values |
 | :-- | :-- | :-- |
-| `auth-config.ts.template` | `src/lib/auth/config.ts` | `USERS` (1–10 lowercase names), `SESSION_TTL_S`, `INVITE_TTL_S`, rate limit, the copy strings |
+| `auth.ts.template` | `src/data/auth.ts` | `USERS` (1–10 lowercase names) and the copy strings. `src/lib/auth/config.ts` (TTLs, `authConfig()`) is copied verbatim; it reads `site.name` from the setup skill's `src/data/site.ts` for the passkey prompt's `rpName`. |
 | `allowlist.ts.template` | `src/lib/gate/allowlist.ts` | The default public set (`/_astro/*.css\|js\|woff2` by extension, `/favicon.svg`, `/favicon.ico`, `/apple-touch-icon.png`, `/robots.txt`, `/og.webp`) plus any exact paths the site's lock page needs. **Never images under `/_astro/`, never a wildcard.** |
-| `lock.astro.template` | `src/pages/lock.astro` | The site's `Layout` import and `noindex` prop; the contract's hooks and nothing else |
+| `lock.astro.template`, `invite.astro.template` | `src/pages/lock.astro`, `src/pages/invite/[token].astro` | The site's `Layout` import, its required `title`, `noindex` and `chrome="none"`; the contract's hooks and the mount `<script>`, nothing else |
 | `wrangler.additions.jsonc` | edits to `wrangler.jsonc` | `main`, `assets.run_worker_first`, `kv_namespaces`, `ratelimits`, `vars` (`RP_ID`, `ORIGIN`, `BACKUP_HOST`), and the required `previews` block with its own KV namespace |
 | `claude-md-section.md` | appended to the site's `CLAUDE.md` | Architecture, the "≥1 on-demand route" rule, "never put private content in JS/CSS", the new `npm run verify` expectation, commands, credentials by name |
 
