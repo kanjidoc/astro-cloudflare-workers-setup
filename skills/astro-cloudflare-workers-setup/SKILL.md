@@ -573,7 +573,7 @@ Not part of setup — run only when the user asks. **Step 18** (compatibility-da
 
 ## Verification
 
-`python3 "${CLAUDE_SKILL_DIR}/scripts/verify_site.py" <url> [--stealth] [--local]` checks HTTPS + Cloudflare, security headers, immutable asset caching, OG/Twitter/canonical/JSON-LD, CSP (meta tag or header), that `og:image` resolves, sitemap, `robots.txt`, no leftover `noindex`, a real HTML 404, the analytics beacon and that the CSP allows it, and favicons. `--stealth` for the anonymity variant; `--local` for a `localhost` preview (skips the checks that need the live host). Fix every `[FAIL]`; `[WARN]` is advisory.
+`python3 "${CLAUDE_SKILL_DIR}/scripts/verify_site.py" <url> [--stealth] [--gated] [--local]` checks HTTPS + Cloudflare, security headers, immutable asset caching, OG/Twitter/canonical/JSON-LD, CSP (meta tag or header), that `og:image` resolves, sitemap, `robots.txt`, no leftover `noindex`, a real HTML 404, the analytics beacon and that the CSP allows it, and favicons. `--stealth` for the anonymity variant; `--gated` for a private site made with the `astro-cloudflare-passkey-login` skill (implies `--stealth`); `--local` for a `localhost` preview (skips the checks that need the live host). Fix every `[FAIL]`; `[WARN]` is advisory.
 
 ## Troubleshooting
 

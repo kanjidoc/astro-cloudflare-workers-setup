@@ -13,6 +13,7 @@ favicons, and that a public site carries no stray noindex.
 Usage:
     python3 verify_site.py https://example.com
     python3 verify_site.py https://example.com --stealth
+    python3 verify_site.py https://example.com --gated
     python3 verify_site.py --local http://localhost:4321
 
 The --local flag checks a local `npm run preview` (workerd) before deploying:
@@ -26,6 +27,12 @@ noindex robots meta tag AND an `X-Robots-Tag: noindex` header, expects NO
 sitemap, and downgrades the OG / JSON-LD checks to warnings. robots.txt must
 stay crawlable: a `Disallow: /` for all agents is a WARN, because crawlers
 that cannot fetch a page never see its noindex.
+
+The --gated flag targets a private site made with astro-cloudflare-passkey-login.
+It implies --stealth (noindex everywhere) and replaces the canonical and 404
+checks: with no session, every document request must serve the lock page in
+place (200, no-store, noindex) with no canonical, a non-document request must
+get 401 with the security headers, and /auth/session must answer 401.
 
 Exit codes:
     0  no check failed (warnings may be present)
@@ -67,6 +74,9 @@ SKIP = "SKIP"  # --local only: a check that cannot pass before deploy
 
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 BEACON_MARKER = "cloudflareinsights.com/beacon"
+LOCK_MARKER = 'data-screen="lock"'  # the passkey-login lock page's hook
+GATE_HEADERS = ("strict-transport-security", "x-content-type-options",
+                "x-frame-options", "referrer-policy", "permissions-policy")
 
 
 # ---------------------------------------------------------------------------
@@ -679,6 +689,9 @@ def check_open_graph(ctx):
                 "homepage must be reachable")
 
     required = ["og:title", "og:type", "og:url", "og:image"]
+    if ctx.get("gated"):
+        # The lock page is served under every URL, so it carries no og:url.
+        required.remove("og:url")
     found = {}
     for prop in required:
         meta = find_meta(head.metas, prop=prop)
@@ -690,7 +703,8 @@ def check_open_graph(ctx):
                 "add Open Graph <meta property=\"og:*\"> tags to the <head>")
 
     not_absolute = [
-        p for p in ("og:url", "og:image") if not is_absolute_https(found[p])
+        p for p in ("og:url", "og:image")
+        if p in found and not is_absolute_https(found[p])
     ]
     if not_absolute:
         return (fail_status, name,
@@ -721,7 +735,8 @@ def check_open_graph(ctx):
                 .format(content_type or "(missing)"),
                 "og:image must be served with an image/* Content-Type")
     return (PASS, name,
-            "all 4 tags present, og:url & og:image absolute, og:image resolves")
+            "all {} tags present, og:image absolute and resolves".format(
+                len(required)))
 
 
 def check_twitter_card(ctx):
@@ -923,6 +938,9 @@ def check_sitemap(ctx):
                 "generate a sitemap with @astrojs/sitemap")
 
     if ctx["stealth"]:
+        if ctx.get("gated") and LOCK_MARKER in resp.body:
+            return (PASS, "Sitemap absent (gated)",
+                    "sitemap-index.xml is behind the gate")
         if resp.status == 404:
             return (PASS, "Sitemap absent (stealth)",
                     "sitemap-index.xml returns 404, as expected")
@@ -1252,6 +1270,151 @@ def check_xrobots_header(ctx):
 
 
 # ---------------------------------------------------------------------------
+# Gated-site checks (--gated; astro-cloudflare-passkey-login)
+# ---------------------------------------------------------------------------
+
+def _gate_nav_headers():
+    return {"Accept": "text/html", "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document"}
+
+
+def check_gate_homepage_lock(ctx):
+    """Gated only: with no session cookie the homepage is the lock page."""
+    name = "Gated: homepage is the lock page"
+    resp = ctx["home"]
+    if resp is None:
+        return (FAIL, name, "homepage unreachable",
+                "homepage must be reachable")
+    if LOCK_MARKER in resp.body:
+        return (PASS, name, "lock page served at /")
+    return (FAIL, name,
+            "the homepage is NOT the lock page — the site is not gated",
+            "the Worker entry may have been dropped (an all-prerendered build "
+            "removes `main`): run `npm run build` and confirm the config that "
+            ".wrangler/deploy/config.json points at still has a `main`; "
+            "check `npm run verify` lists AUTH_KV")
+
+
+def check_gate_unknown_path(ctx):
+    """
+    Gated only: an unknown URL serves the lock page in place — 200, no-store,
+    noindex — never a 404 and never a redirect (nothing may leak about which
+    paths exist).
+    """
+    name = "Gated: unknown path serves the lock page in place"
+    token = "{:08x}".format(random.getrandbits(32))
+    url = urllib.parse.urljoin(ctx["base"], "/__verify_gate_" + token)
+    try:
+        resp = fetch(url, follow_redirects=False,
+                     extra_headers=_gate_nav_headers())
+    except Exception as err:
+        return (FAIL, name, "could not fetch {}: {}".format(url, err),
+                "the site must answer unknown routes")
+    problems = []
+    if resp.status != 200:
+        problems.append("HTTP {} (expected 200)".format(resp.status))
+    if LOCK_MARKER not in resp.body:
+        problems.append("body is not the lock page")
+    if "no-store" not in resp.header("cache-control").lower():
+        problems.append("Cache-Control lacks no-store: {!r}".format(
+            resp.header("cache-control")))
+    if not has_noindex(resp.header("x-robots-tag")):
+        problems.append("X-Robots-Tag lacks noindex")
+    if problems:
+        return (FAIL, name, "; ".join(problems),
+                "src/worker.ts must answer every document request without a "
+                "session with /lock/ at the requested URL, Cache-Control: "
+                "no-store and X-Robots-Tag: noindex, nofollow")
+    return (PASS, name, "200 lock page, no-store, noindex")
+
+
+def check_gate_subresource_401(ctx):
+    """
+    Gated only: a non-document request (Sec-Fetch-Dest: image) for an unknown
+    path gets 401, and the Worker sets the security headers itself, since
+    _headers never applies to Worker-generated responses.
+    """
+    name = "Gated: non-document request gets 401 with security headers"
+    token = "{:08x}".format(random.getrandbits(32))
+    url = urllib.parse.urljoin(ctx["base"], "/__verify_gate_" + token + ".png")
+    try:
+        resp = fetch(url, follow_redirects=False, extra_headers={
+            "Accept": "image/*", "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Dest": "image"})
+    except Exception as err:
+        return (FAIL, name, "could not fetch {}: {}".format(url, err),
+                "the site must answer unknown routes")
+    if resp.status != 401:
+        return (FAIL, name, "HTTP {} (expected 401)".format(resp.status),
+                "src/lib/gate/classify.ts: only Sec-Fetch-Dest document (or "
+                "absent) may get the lock page; everything else is 401")
+    missing = [h for h in GATE_HEADERS if not resp.header(h)]
+    if not has_noindex(resp.header("x-robots-tag")):
+        missing.append("x-robots-tag (noindex)")
+    if missing:
+        return (FAIL, name, "401 but missing: " + ", ".join(missing),
+                "the Worker must set the security headers on every response "
+                "it creates (src/lib/gate/headers.ts) — public/_headers does "
+                "not apply to Worker-generated responses")
+    return (PASS, name, "401 with all security headers and noindex")
+
+
+def check_gate_auth_session(ctx):
+    """Gated only: GET /auth/session without a cookie answers 401."""
+    name = "Gated: /auth/session answers 401 without a session"
+    url = urllib.parse.urljoin(ctx["base"], "/auth/session")
+    try:
+        resp = fetch(url, follow_redirects=False,
+                     extra_headers={"Accept": "application/json"})
+    except Exception as err:
+        return (FAIL, name, "could not fetch /auth/session: {}".format(err),
+                "the auth endpoints must be reachable")
+    if resp.status == 401:
+        return (PASS, name, "401 as expected")
+    if resp.status == 200 and LOCK_MARKER in resp.body:
+        return (FAIL, name, "/auth/session served the lock page",
+                "src/worker.ts must pass /auth/* and /invite/* through to the "
+                "Astro handler before the session check")
+    if resp.status == 503:
+        return (FAIL, name,
+                "503 — the Worker is failing closed: AUTH_COOKIE_SECRET or "
+                "AUTH_KV is missing",
+                "`npx wrangler secret put AUTH_COOKIE_SECRET`; check "
+                "kv_namespaces in wrangler.jsonc — on a Worker Preview URL the "
+                "`previews` block needs its own KV id and `wrangler preview "
+                "base-config secret put AUTH_COOKIE_SECRET`")
+    if resp.status == 404:
+        return (FAIL, name, "404 — the /auth/session route is missing",
+                "src/pages/auth/session.ts must exist and stay on-demand "
+                "(prerender = false)")
+    return (FAIL, name, "HTTP {} (expected 401)".format(resp.status),
+            "GET /auth/session without a session must answer 401")
+
+
+def check_gate_no_canonical(ctx):
+    """
+    Gated only: the lock page is served under every URL, so it must claim no
+    canonical URL and no og:url.
+    """
+    name = "Gated: lock page claims no canonical URL"
+    head = ctx["head"]
+    if head is None:
+        return (FAIL, name, "no homepage HTML to parse",
+                "homepage must be reachable")
+    claims = []
+    for link in head.links:
+        if "canonical" in link.get("rel", "").lower().split():
+            claims.append("<link rel=\"canonical\">")
+    if find_meta(head.metas, prop="og:url") is not None:
+        claims.append("og:url")
+    if claims:
+        return (FAIL, name, "lock page carries " + " and ".join(claims),
+                "render src/pages/lock.astro with Layout's `noindex` prop, "
+                "which drops canonical and og:url")
+    return (PASS, name, "no canonical or og:url on the lock page")
+
+
+# ---------------------------------------------------------------------------
 # Check runner
 # ---------------------------------------------------------------------------
 
@@ -1302,7 +1465,7 @@ def normalize_url(raw, default_scheme="https"):
     return url
 
 
-def build_context(base_url, stealth, local=False):
+def build_context(base_url, stealth, local=False, gated=False):
     """
     Fetch the homepage once and assemble the context dict shared by all
     checks. `base` is rebased on where the homepage actually landed (scheme +
@@ -1328,6 +1491,7 @@ def build_context(base_url, stealth, local=False):
         "base": base,
         "stealth": stealth,
         "local": local,
+        "gated": gated,
         "home": home,
         "head": head,
     }
@@ -1357,7 +1521,16 @@ def main(argv=None):
              "before deploying; HTTPS, Cloudflare-edge, served-host and "
              "other-host checks are reported as SKIP.",
     )
+    parser.add_argument(
+        "--gated",
+        action="store_true",
+        help="Verify a private site (astro-cloudflare-passkey-login): implies "
+             "--stealth; expects the lock page in place of every document "
+             "without a session, 401 for other requests, and /auth/session "
+             "to answer 401.",
+    )
     args = parser.parse_args(argv)
+    stealth = args.stealth or args.gated
 
     style = Style(sys.stdout.isatty())
     base_url = normalize_url(args.url, "http" if args.local else "https")
@@ -1369,14 +1542,16 @@ def main(argv=None):
               "preview` prints), got {}".format(args.url))
         return 2
 
-    mode = "stealth / coming-soon" if args.stealth else "standard / public"
+    mode = "stealth / coming-soon" if stealth else "standard / public"
+    if args.gated:
+        mode = "private / passkey-gated (implies stealth)"
     if args.local:
         mode += ", local preview (pre-deploy)"
     print(style.bold("Verifying {}".format(base_url)))
     print(style.dim("Mode: {}".format(mode)))
     print("")
 
-    ctx, error = build_context(base_url, args.stealth, args.local)
+    ctx, error = build_context(base_url, stealth, args.local, args.gated)
     if ctx["home"] is None:
         if args.local:
             print("Nothing answered at {} — run `npm run build && npm run "
@@ -1407,17 +1582,20 @@ def main(argv=None):
         check_hashed_asset,
         check_open_graph,
         check_twitter_card,
-        check_canonical,
+        check_gate_no_canonical if args.gated else check_canonical,
         check_site_host,
         check_json_ld,
         check_csp,
         check_sitemap,
         check_robots,
-        check_custom_404,
+        check_gate_unknown_path if args.gated else check_custom_404,
         check_analytics_beacon,
         check_favicons,
     ]
-    if args.stealth:
+    if args.gated:
+        checks.extend([check_gate_homepage_lock, check_gate_subresource_401,
+                       check_gate_auth_session])
+    if stealth:
         checks.append(check_robots_meta)
         checks.append(check_xrobots_header)
     else:
