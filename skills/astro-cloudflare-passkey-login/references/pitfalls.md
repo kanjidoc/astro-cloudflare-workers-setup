@@ -16,6 +16,7 @@
 | TypeScript: `AUTH_KV` / `RateLimit` unknown | types not regenerated after the `wrangler.jsonc` edit | `npm run generate-types` |
 | `node --test` fails with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` | Node's strip-only TS rejects enums, namespaces, parameter properties | keep helpers to erasable TypeScript; on Node < 22.18 upgrade (`.nvmrc` says 24) |
 | `.dev.vars` ignored / `RP_ID` not overridden locally | `secrets.required` set in `wrangler.jsonc` | remove it; the Worker fails closed on its own |
+| `npm i` warns `install scripts not yet covered by allowScripts: fsevents, workerd` | the scaffold's `allowScripts` lists only `esbuild` | harmless; build, preview and the dry run work. Optionally `npm install-scripts approve workerd` |
 | Wrangler warns `No environment found in configuration with name "e2e"` | leftover `CLOUDFLARE_ENV` from another project's scripts | harmless; unset it |
 | A Worker error page (1101) arrives without `X-Robots-Tag` or the security headers | an uncaught throw skipped the header wrapper | `src/worker.ts` wraps everything in try/catch → 503 with headers; log only `err.name`/`err.message`, never a URL (invite URLs carry tokens) |
 | `wrangler secret put` before the gated code is live | wondering whether the Worker must exist first | it works on the existing Worker; do it in Step 8, before the deploy. Previews need `npx wrangler preview base-config secret put AUTH_COOKIE_SECRET` (open beta) |

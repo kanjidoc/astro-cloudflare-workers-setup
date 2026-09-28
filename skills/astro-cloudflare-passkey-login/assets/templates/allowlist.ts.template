@@ -9,8 +9,8 @@ const PUBLIC_FILES = new Set([
   '/apple-touch-icon.png',
   '/robots.txt',
   '/og.webp',
-  // Exact paths the lock page needs (a logo, say). Never a directory, never a wildcard.
-  // '<extra-public-path>',
+  // Exact paths the lock page needs (a logo, say), e.g. '/images/logo.svg'.
+  // Never a directory, never a wildcard, never an image under /_astro/.
 ]);
 
 const SEGMENT = '[A-Za-z0-9_-][A-Za-z0-9_.-]*';

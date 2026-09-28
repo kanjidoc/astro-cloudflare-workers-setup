@@ -18,17 +18,19 @@ Turns a **live site built by `astro-cloudflare-workers-setup`** into a private o
 ## Preconditions — check, and stop with the reason if any fails
 
 ```bash
-node -v; grep -c '"assets"' wrangler.jsonc; grep -o '"pattern": "[^"]*"' wrangler.jsonc; grep -c "@astrojs/cloudflare" astro.config.mjs; grep -c "output: 'static'" astro.config.mjs; npm pkg get scripts.build scripts.verify scripts.deploy scripts.generate-types; cat .nvmrc; git status --porcelain | wc -l; npx wrangler whoami --json 2>/dev/null | head -c 300; ls src/worker.ts 2>/dev/null
+node -v; grep -c '"assets"' wrangler.jsonc; grep -o '"pattern": "[^"]*"' wrangler.jsonc; grep -c "@astrojs/cloudflare" astro.config.mjs; grep -c "output: 'static'" astro.config.mjs; npm pkg get scripts.build scripts.verify scripts.deploy scripts.generate-types; cat .nvmrc; git status --porcelain | wc -l; npx wrangler whoami 2>/dev/null | grep -E 'Account Name|API Token|OAuth'; grep -oE '[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev' public/_headers wrangler.jsonc | head -1; ls src/worker.ts 2>/dev/null
 ```
 
 - **Built by the setup skill:** `assets` in `wrangler.jsonc`, the adapter and `output: 'static'` in `astro.config.mjs`, the four npm scripts, `.nvmrc`. Missing → this skill doesn't apply; say so.
 - **A custom domain is live:** a `routes[].pattern` exists and `curl -sI https://<apex>/` returns 200. Passkeys bind to that host; a site on `*.workers.dev` alone would strand every passkey the day it gets a domain. No domain → run the setup skill's Step 11 first.
-- **Authenticated:** `wrangler whoami --json` shows an account. Token present → never `wrangler login`. Nothing → 👤 ask the user to set `CLOUDFLARE_API_TOKEN` or log in once.
-- **Node ≥ 22.18** (`.nvmrc` says 24; the unit tests run `.ts` natively). Clean git tree. `src/worker.ts` already present → `references/resume.md`.
+- **Authenticated:** `wrangler whoami` shows an account. Token present → never `wrangler login`. Nothing → 👤 ask the user to set `CLOUDFLARE_API_TOKEN` or log in once.
+- **Node ≥ 22.18** (`.nvmrc` says 24; the unit tests run `.ts` natively).
+- **Clean git tree** (`git status --porcelain` prints nothing). Dirty → 👤 ask the user to commit or stash first; this skill branches and commits.
+- `src/worker.ts` already present → `references/resume.md`.
 
 ## Confirm inputs (one message)
 
-Read `<apex>` from `routes[].pattern` and `<name>` from `wrangler.jsonc`; `<backup-host>` is `<name>.<subdomain>.workers.dev` (subdomain from `npx wrangler whoami` or the site's `CLAUDE.md`). Confirm them, don't ask. Ask:
+Read `<apex>` from `routes[].pattern` and `<name>` from `wrangler.jsonc`. `<backup-host>` is `<name>.<subdomain>.workers.dev`: the precondition grep finds it in `public/_headers` (setup Step 11 wrote a noindex block for it). If nothing prints, 👤 ask the user to copy it from the dashboard (Workers & Pages → the Worker → Settings → Domains & Routes). Confirm all three, don't ask. Ask:
 
 1. **Who signs in?** One to ten lowercase names (`[a-z0-9-]`, used as KV keys and in the greeting). Default: the user's first name.
 2. **Any extra public files the lock page will show?** Exact paths only (a logo). Default: none.
@@ -58,19 +60,24 @@ cp -R "${CLAUDE_SKILL_DIR}/assets/site/." . && ls src/worker.ts src/lib/auth src
 
 ### Step 4 — Fill the per-site files
 
-All from `${CLAUDE_SKILL_DIR}/assets/templates/`. Replace every `<placeholder>`; the setup skill's placeholder grep must print nothing afterwards.
+All from `${CLAUDE_SKILL_DIR}/assets/templates/`. Replace every `<placeholder>`; afterwards this grep must print nothing:
+
+```bash
+grep -rnE '<(apex|backup-host|kv-id|preview-kv-id|user-[0-9]|site-name|extra-public-path)>' src wrangler.jsonc
+```
 
 - `auth.ts.template` → `src/data/auth.ts`: the names from Q1. Copy strings may be reworded, never removed.
-- `allowlist.ts.template` → `src/lib/gate/allowlist.ts`: add Q2's exact paths to `PUBLIC_FILES`. Never a directory or wildcard, never an image under `/_astro/`.
+- `allowlist.ts.template` → `src/lib/gate/allowlist.ts`: add Q2's exact paths to `PUBLIC_FILES` (none → copy as is). Never a directory or wildcard, never an image under `/_astro/`.
 - `lock.astro.template` → `src/pages/lock.astro` and `invite.astro.template` → `src/pages/invite/[token].astro`: set the `Layout` import path and the `title`. Keep every `data-*` hook and the closing `<script>` unchanged.
 - `wrangler.additions.jsonc` → **targeted Edits** to `wrangler.jsonc`: set `main`, add `run_worker_first` inside the existing `assets`, add `kv_namespaces` (without `id` for now), `ratelimits`, `vars`, `previews`. Never rewrite the file; keep `compatibility_date`, `routes`, `observability` as they are.
 - `package.json`: `"build": "astro check && astro build && node --test tests/build-guard.test.ts"`, `"test": "node --test tests/unit/"`, `"invite": "node scripts/auth/invite.mjs"`, `"auth:list": "node scripts/auth/list.mjs"`, `"auth:revoke": "node scripts/auth/revoke.mjs"`. `verify` and `deploy` are unchanged.
 - `.gitignore`: append `.dev.vars*` and `!.dev.vars.example`.
 - `src/layouts/Layout.astro`: add `chrome?: 'page' | 'none'` to `Props` (default `'page'`), and inside `<body>` render `<script src="../scripts/arrival.ts"></script>` and `<script src="../scripts/signout.ts"></script>` only when `chrome === 'page'`, before `<slot />`. If the site has a header component, add a `<button type="button" data-auth-action="signout">` to it (unstyled). The lock and invite pages pass `chrome="none"`.
 - `public/_headers`: add the comment `# src/worker.ts runs first and sets these same headers on every response it returns; these rules still reach asset responses, but the Worker is authoritative.`
+- `public/robots.txt`: remove the `Sitemap:` line (the sitemap is behind the gate now; `robots.txt` itself stays public and crawlable).
 - `.dev.vars` (gitignored) from `.dev.vars.example` with `AUTH_COOKIE_SECRET=$(openssl rand -base64 32)`.
 
-Then `npx prettier --write src wrangler.jsonc --log-level warn`.
+Then `npx prettier --write src --log-level warn` (not `wrangler.jsonc`: Prettier would re-indent the adapter's file).
 
 ### Step 5 — Types
 
@@ -82,7 +89,7 @@ Then `npx prettier --write src wrangler.jsonc --log-level warn`.
 npm test && npm run verify
 ```
 
-Expect every test to pass, `astro check` 0 errors, the build guard to pass, and the dry run to print `Configuration being used: "dist/server/wrangler.json"` and a bindings table with `AUTH_KV`, `AUTH_RATE_LIMIT`, `ASSETS` and the three vars. **`No bindings found.` means the gate was dropped**: see `references/pitfalls.md`, first row.
+Expect two `node --test` summaries with `fail 0` (the unit suites, then the build guard's 5 tests after the build), `astro check` `0 errors`, then the dry run: `Configuration being used: "dist/server/wrangler.json"`, an `Attaching additional modules` table, and `Your Worker has access to the following bindings:` listing `AUTH_KV`, `AUTH_RATE_LIMIT`, `ASSETS` and the three vars. **`No bindings found.` means the gate was dropped**: see `references/pitfalls.md`, first row.
 
 ### Step 7 — Local gate check
 
@@ -93,7 +100,7 @@ curl -sI -H 'Sec-Fetch-Dest: image' http://localhost:4321/x.png | head -1
 npx astro preview stop
 ```
 
-Expect 0 FAIL (SKIPs for HTTPS/Cloudflare are normal) and `HTTP/1.1 401`. Optional 👤 look: open `http://localhost:4321/` and see the unstyled lock page. A local passkey round-trip needs Chrome's virtual authenticator; skip it here, Step 11 does the real one. Commit the step's work.
+Expect 0 FAIL and `HTTP/1.1 401`. Normal: SKIPs for HTTPS/Cloudflare, and a WARN for the analytics beacon when analytics isn't set up. A robots.txt WARN means the `Sitemap:` line is still there (Step 4). Optional 👤 look: open `http://localhost:4321/` and see the unstyled lock page. A local passkey round-trip needs Chrome's virtual authenticator; skip it here, Step 11 does the real one. Commit the step's work.
 
 ### Step 8 — Cloudflare resources (🤖, after the user's OK)
 

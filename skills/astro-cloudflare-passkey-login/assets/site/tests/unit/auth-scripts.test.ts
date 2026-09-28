@@ -15,7 +15,7 @@ import {
   parseRevokeArgs,
   pickOne,
 } from '../../scripts/auth/revoke.mjs';
-import { USERS } from '../../src/data/auth.ts';
+import { SITE_ORIGIN, USERS } from '../../src/data/auth.ts';
 
 // Names that must pass the USERS check come from the site's own list.
 const [A, B = A] = USERS;
@@ -102,9 +102,16 @@ test('kv.get: a --remote/--preview 404 is null; every other failure (401/500/net
   });
   assert.equal(remoteStore.get('user:bob'), null);
 
-  const previewStore = kv('preview', () => {
-    throw notFoundErr;
-  });
+  // The preview namespace id is only written at Step 8, so don't read the real wrangler.jsonc.
+  const PREVIEW_CONFIG =
+    '{ "previews": { "kv_namespaces": [{ "binding": "AUTH_KV", "id": "prev123" }] } }';
+  const previewStore = kv(
+    'preview',
+    () => {
+      throw notFoundErr;
+    },
+    () => PREVIEW_CONFIG,
+  );
   assert.equal(previewStore.get('user:bob'), null);
 
   const unauthorizedErr = Object.assign(new Error('exit 1'), {
@@ -141,7 +148,7 @@ test('invite args: user, 7-day default, --hours, origin per target', () => {
   assert.deepEqual(parseInviteArgs([B]), {
     user: B,
     ttlSeconds: 604_800,
-    origin: 'https://example.com',
+    origin: SITE_ORIGIN,
     target: 'remote',
   });
   assert.equal(parseInviteArgs([A, '--hours', '2']).ttlSeconds, 7200);

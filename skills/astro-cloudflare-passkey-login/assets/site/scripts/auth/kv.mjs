@@ -102,9 +102,10 @@ export function isRemoteNotFound(err) {
 /**
  * @param {Target} target
  * @param {(args: string[]) => string} [run] Injectable for tests.
+ * @param {() => string} [readConfig] Injectable for tests (wrangler.jsonc text).
  */
-export function kv(target, run = wrangler) {
-  const ns = namespaceArgs(target);
+export function kv(target, run = wrangler, readConfig = undefined) {
+  const ns = namespaceArgs(target, readConfig);
   return {
     /**
      * @param {string} key
