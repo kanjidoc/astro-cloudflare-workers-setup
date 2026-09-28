@@ -1,0 +1,21 @@
+---
+// Lock screen. Served by src/worker.ts at whatever URL was asked for, so it's noindex with no
+// canonical or og:url. Unstyled on purpose: style it with CSS, keep every data-* hook below.
+import Layout from '../layouts/Layout.astro';
+import { authCopy } from '../data/auth';
+---
+
+<Layout title="<site-name>" noindex chrome="none">
+  <main data-screen="lock">
+    <h1 data-part="heading">{authCopy.lockHeading}</h1>
+    <button type="button" data-auth-action="unlock">
+      <span data-part="label">{authCopy.unlockLabel}</span>
+    </button>
+    <p data-part="failure" aria-live="polite" hidden>{authCopy.failure}</p>
+  </main>
+</Layout>
+
+<script>
+  import { mountAuthFlow } from '../scripts/auth-flow.ts';
+  mountAuthFlow('signin');
+</script>

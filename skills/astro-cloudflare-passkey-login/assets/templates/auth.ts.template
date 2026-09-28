@@ -1,6 +1,11 @@
 // Who can sign in, and the sign-in copy. Edit words here, not in page markup.
 // Names are lowercase [a-z0-9-], 1–32 chars: they are KV keys and cookie values.
 
+/** Shown in the passkey prompt (WebAuthn rpName). */
+export const RP_NAME = '<site-name>';
+/** Where invite links point (the apex, https). */
+export const SITE_ORIGIN = 'https://<apex>';
+
 export const USERS = ['<user-1>', '<user-2>'] as const;
 export type User = (typeof USERS)[number];
 

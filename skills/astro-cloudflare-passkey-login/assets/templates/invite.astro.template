@@ -1,0 +1,45 @@
+---
+// Invite page. On demand: looks the invite up but never consumes it, so link-preview bots that
+// unfurl the link are harmless. Unstyled on purpose: style it with CSS, keep every data-* hook.
+import { env } from 'cloudflare:workers';
+import Layout from '../../layouts/Layout.astro';
+import { authCopy, withName } from '../../data/auth';
+import { authConfig } from '../../lib/auth/config.ts';
+import { inviteLookup } from '../../lib/auth/handlers.ts';
+import { rateLimit, unavailable } from '../../lib/auth/http.ts';
+
+export const prerender = false;
+
+const cfg = authConfig(env);
+if (!cfg) return unavailable();
+const limited = await rateLimit(cfg.limiter, Astro.request, 'invite-get');
+if (limited) return limited;
+
+const invite = await inviteLookup(cfg, Astro.params.token ?? '');
+// Missing, used and expired all look the same (no enumeration).
+Astro.response.status = invite ? 200 : 410;
+Astro.response.headers.set('Cache-Control', 'no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+const name = invite?.user;
+---
+
+<Layout title="<site-name>" noindex chrome="none">
+  {name ? (
+    <main data-screen="invite">
+      <h1 data-part="heading">{withName(authCopy.inviteHeading, name)}</h1>
+      <button type="button" data-auth-action="register">
+        <span data-part="label">{authCopy.registerLabel}</span>
+      </button>
+      <p data-part="failure" aria-live="polite" hidden>{authCopy.failure}</p>
+    </main>
+  ) : (
+    <main data-screen="invite-unavailable">
+      <h1 data-part="heading">{authCopy.inviteUnavailable}</h1>
+    </main>
+  )}
+</Layout>
+
+<script>
+  import { mountAuthFlow } from '../../scripts/auth-flow.ts';
+  mountAuthFlow('invite');
+</script>

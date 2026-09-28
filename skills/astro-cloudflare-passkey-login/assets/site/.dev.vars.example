@@ -1,0 +1,5 @@
+# Copy to .dev.vars (gitignored) for `npm run dev` and `npm run preview`. Never commit a real secret.
+RP_ID=localhost
+ORIGIN=http://localhost:4321
+BACKUP_HOST=backup.localhost
+AUTH_COOKIE_SECRET=replace-with-openssl-rand-base64-32
