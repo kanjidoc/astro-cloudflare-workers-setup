@@ -199,12 +199,12 @@ export default defineConfig({
 
 ### Step 5 — Finish `wrangler.jsonc`
 
-Keep the adapter-generated file; make only two edits: confirm `compatibility_date` is **today** (`YYYY-MM-DD`; the adapter writes the bundled workerd's date, often a day behind), and add `"not_found_handling": "404-page"` inside `assets`. Result:
+Keep the adapter-generated file; make only two edits: confirm `compatibility_date` is **today** (`YYYY-MM-DD`; the adapter writes the bundled workerd's date, a day or two behind), and add `"not_found_handling": "404-page"` inside `assets`. Result:
 
 ```jsonc
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "<repo-name>",
+  "name": "<repo-name>",  // lowercased by the adapter (npm package-name rules); use this exact form for the dashboard Worker (Step 12) and the workers.dev host
   "compatibility_date": "<today YYYY-MM-DD>",
   "compatibility_flags": ["global_fetch_strictly_public"],
   "main": "@astrojs/cloudflare/entrypoints/server",

@@ -73,7 +73,7 @@ grep -rnE '<(apex|backup-host|kv-id|preview-kv-id|user-[0-9]|site-name|extra-pub
 - `package.json`: `"build": "astro check && astro build && node --test tests/build-guard.test.ts"`, `"test": "node --test tests/unit/"`, `"invite": "node scripts/auth/invite.mjs"`, `"auth:list": "node scripts/auth/list.mjs"`, `"auth:revoke": "node scripts/auth/revoke.mjs"`. `verify` and `deploy` are unchanged.
 - `.gitignore`: append `.dev.vars*` and `!.dev.vars.example`.
 - `src/layouts/Layout.astro`: add `chrome?: 'page' | 'none'` to `Props` (default `'page'`). Everything that is site chrome — header, nav, footer, and the two scripts `<script src="../scripts/arrival.ts"></script>` and `<script src="../scripts/signout.ts"></script>` — renders only when `chrome === 'page'`; `<slot />` always renders. Anonymous visitors see the lock page with `chrome="none"`, so nothing in the chrome (page titles in a nav, a sign-out button) may leak. If the site has a header component, add a `<button type="button" data-auth-action="signout">` to it (unstyled). The lock and invite pages pass `chrome="none"`; make `src/pages/404.astro` pass it too (the Worker serves the site's 404 for unknown `/auth/*` and `/invite/*` paths).
-- `public/_headers`: add the comment `# src/worker.ts runs first and sets these same headers on every response it returns; these rules still reach asset responses, but the Worker is authoritative.`
+- `public/_headers`: add the comment `# src/worker.ts runs first and sets these same headers on every response it returns; these rules still reach asset responses, but the Worker is authoritative.` If the site customised its headers (dropped `includeSubDomains`, changed `Referrer-Policy` or `Permissions-Policy`), mirror that in `src/lib/gate/headers.ts`, which otherwise re-imposes the defaults on every response.
 - `public/robots.txt`: remove the `Sitemap:` line (the sitemap is behind the gate now; `robots.txt` itself stays public and crawlable).
 - `.dev.vars` (gitignored) from `.dev.vars.example` with `AUTH_COOKIE_SECRET=$(openssl rand -base64 32)`.
 
@@ -107,10 +107,10 @@ Expect 0 FAIL and `HTTP/1.1 401`. Normal: SKIPs for HTTPS/Cloudflare, and a WARN
 Tell the user: two free KV namespaces and one secret will be created on the account. Then:
 
 ```bash
-cd "$(mktemp -d)" && npx wrangler kv namespace create <name>-auth && npx wrangler kv namespace create <name>-auth-preview; cd -
+W="$PWD/node_modules/.bin/wrangler"; cd "$(mktemp -d)" && "$W" kv namespace create <name>-auth && "$W" kv namespace create <name>-auth-preview; cd -
 ```
 
-Run from an empty directory so wrangler can't rewrite `wrangler.jsonc`. Paste the two ids into `kv_namespaces[0].id` and `previews.kv_namespaces[0].id`. Then:
+Run from an empty directory so wrangler can't rewrite `wrangler.jsonc`, with the project's own wrangler (a bare `npx wrangler` there would download the latest). Paste the two ids into `kv_namespaces[0].id` and `previews.kv_namespaces[0].id`. Then:
 
 ```bash
 openssl rand -base64 32 | npx wrangler secret put AUTH_COOKIE_SECRET
@@ -130,7 +130,7 @@ Commit and `git push -u origin feat/passkey-login`. With Workers Builds connecte
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/../astro-cloudflare-workers-setup/scripts/verify_site.py" --gated https://<apex>
-curl -sI https://<backup-host>/x | head -3
+curl -sI https://<backup-host>/x | grep -iE '^(HTTP|location)'
 ```
 
 Expect 0 FAIL and a `301` with `location: https://<apex>/x`. **From this moment everyone without a session sees the lock page.**

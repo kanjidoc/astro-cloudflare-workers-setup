@@ -2,7 +2,7 @@
 
 Added with the `astro-cloudflare-passkey-login` skill. Every page needs a passkey session; there are no passwords and no identity provider.
 
-**Architecture.** `wrangler.jsonc` `main` is the custom entry `src/worker.ts`, and `assets.run_worker_first: true` runs it before every request. Order: redirect `BACKUP_HOST` to the apex → public allowlist (`src/lib/gate/allowlist.ts`) → `/auth/*` and `/invite/*` to Astro → session check (KV `AUTH_KV`; the cookie holds a token, KV holds its SHA-256) → lock page in place (200, `no-store`) for documents, 401 for everything else. The Worker sets every security header itself, including `X-Robots-Tag: noindex, nofollow`; `public/_headers` still applies to asset responses, but the Worker is authoritative (`src/lib/gate/headers.ts`).
+**Architecture.** `wrangler.jsonc` `main` is the custom entry `src/worker.ts`, and `assets.run_worker_first: true` runs it before every request. Order: redirect `BACKUP_HOST` to the apex → public allowlist (`src/lib/gate/allowlist.ts`) → `/auth/*` and `/invite/*` to Astro → session check (KV `AUTH_KV`; the cookie holds a token, KV holds its SHA-256) → lock page in place (200, `no-store`) for documents, 401 for everything else. The Worker sets every security header itself, including `X-Robots-Tag: noindex, nofollow`; `public/_headers` still applies to asset responses, but the Worker is authoritative (`src/lib/gate/headers.ts`): a header change belongs in both places, or the Worker re-imposes its defaults.
 
 **Rules that keep the gate working.**
 - **At least one route must stay on-demand** (`src/pages/auth/session.ts` is one). An all-prerendered build silently drops `main`. `npm run build` runs `tests/build-guard.test.ts`, which fails the build if that happens.
