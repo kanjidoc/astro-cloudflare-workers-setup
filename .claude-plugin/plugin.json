@@ -1,7 +1,7 @@
 {
   "name": "astro-cloudflare-workers-setup",
-  "description": "Guided, end-to-end setup for an Astro static site on Cloudflare Workers — from an empty folder to a live, auto-deploying site with a custom domain, Workers Builds CI/CD, SEO, security headers, accessibility, and a self-documenting repo. Built to work for both novices and experienced developers.",
-  "version": "2.0.0",
+  "description": "Guided, end-to-end setup for an Astro static site on Cloudflare Workers — from an empty folder to a live, auto-deploying site with a custom domain, Workers Builds CI/CD, SEO, security headers, accessibility, and a self-documenting repo — plus an optional second skill that makes the site private with passkey-only sign-in. Built to work for both novices and experienced developers.",
+  "version": "2.1.0",
   "author": {
     "name": "kanjidoc"
   },

@@ -58,6 +58,11 @@ Restart Claude Code. A manual copy never updates itself, so re-copy it to update
 
 In Claude Code, just say what you want, for example *"set up a new Astro website on Cloudflare."* The skill triggers automatically. You can also invoke it directly with `/astro-cloudflare-workers-setup` (or the full plugin form `/astro-cloudflare-workers-setup:astro-cloudflare-workers-setup` if another command already uses the short name). It guides the whole process phase by phase and asks you only for what it genuinely needs.
 
+## What's new in 2.1
+
+- **A second skill, `astro-cloudflare-passkey-login`.** Makes a finished site private with passkey-only sign-in: a Worker gate that runs before every request, sessions in Workers KV, single-use invite links, and laptop scripts to invite, list and revoke. No passwords, no identity provider, free plan only. The lock page ships unstyled, like everything else here. See *Making a site private*.
+- **`verify_site.py --gated`** checks a private site: the lock page in place of every document, 401 for other requests, security headers on Worker responses, `/auth/session` answering 401.
+
 ## What's new in 2.0
 
 - Rebuilt for **Astro 7** and `@astrojs/cloudflare` 14.
