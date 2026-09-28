@@ -80,7 +80,7 @@ async function gate(
   const cfg = authConfig(env);
   const session = cfg ? await resolveSession(request, cfg.kv) : null;
   if (session) return servePrivate(request, env, ctx, session);
-  return serveLocked(request, env);
+  return serveLocked(request, env, readOnly);
 }
 
 async function servePrivate(
@@ -117,12 +117,13 @@ async function servePrivate(
   return out;
 }
 
-async function serveLocked(request: Request, env: Env): Promise<Response> {
+async function serveLocked(
+  request: Request,
+  env: Env,
+  readOnly: boolean,
+): Promise<Response> {
   let res: Response;
-  if (
-    (request.method === 'GET' || request.method === 'HEAD') &&
-    wantsDocument(request)
-  ) {
+  if (readOnly && wantsDocument(request)) {
     // Served at the requested URL (no redirect). The trailing slash matters: /lock would 307.
     const lock = await env.ASSETS.fetch(
       new Request(new URL(LOCK_PAGE, request.url), { method: request.method }),

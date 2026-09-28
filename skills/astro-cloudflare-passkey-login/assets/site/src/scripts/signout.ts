@@ -42,6 +42,8 @@ function post(): Promise<Response> {
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
     credentials: 'same-origin',
+    // Never leave the faded page hanging: a stalled request counts as a failed sign-out.
+    signal: AbortSignal.timeout(8000),
   });
 }
 

@@ -9,6 +9,15 @@ export const SITE_ORIGIN = 'https://<apex>';
 export const USERS = ['<user-1>', '<user-2>'] as const;
 export type User = (typeof USERS)[number];
 
+// Refuse a malformed list at import time, so `npm run build`, the Worker and the scripts all stop.
+const NAME = /^[a-z0-9-]{1,32}$/;
+for (const name of USERS) {
+  if (!NAME.test(name))
+    throw new Error(`USERS: "${name}" must be lowercase [a-z0-9-], 1-32 chars`);
+}
+if (new Set(USERS).size !== USERS.length)
+  throw new Error('USERS: names must be unique');
+
 export function isUser(value: unknown): value is User {
   return (
     typeof value === 'string' && (USERS as readonly string[]).includes(value)

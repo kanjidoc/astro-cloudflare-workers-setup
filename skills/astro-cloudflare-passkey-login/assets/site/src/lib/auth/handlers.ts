@@ -73,9 +73,8 @@ export async function signinOptions(
   return withCookies(json({ options }), [challengeCookie(sealed)]);
 }
 
-function isAuthenticationResponse(
-  body: unknown,
-): body is AuthenticationResponseJSON {
+/** The shape both WebAuthn ceremonies return: a bounded credential id, a public-key type and a response object. */
+function isCredentialResponse(body: unknown): boolean {
   if (!body || typeof body !== 'object') return false;
   const b = body as Record<string, unknown>;
   return (
@@ -85,6 +84,12 @@ function isAuthenticationResponse(
     !!b.response &&
     typeof b.response === 'object'
   );
+}
+
+function isAuthenticationResponse(
+  body: unknown,
+): body is AuthenticationResponseJSON {
+  return isCredentialResponse(body);
 }
 
 /** POST /auth/signin/verify → 200 { ok, user } + session and arrival cookies, or 401 { ok: false }. */
@@ -193,15 +198,7 @@ export async function inviteOptions(
 function isRegistrationResponse(
   body: unknown,
 ): body is RegistrationResponseJSON {
-  if (!body || typeof body !== 'object') return false;
-  const b = body as Record<string, unknown>;
-  return (
-    typeof b.id === 'string' &&
-    CREDENTIAL_ID.test(b.id) &&
-    b.type === 'public-key' &&
-    !!b.response &&
-    typeof b.response === 'object'
-  );
+  return isCredentialResponse(body);
 }
 
 /**
@@ -313,7 +310,7 @@ export async function signout(
   if (session) await deleteSession(cfg.kv, session.keyHash);
   const res = new Response(null, {
     status: 204,
-    headers: { 'Clear-Site-Data': '"cache"', 'Cache-Control': 'no-store' },
+    headers: { 'Cache-Control': 'no-store' },
   });
   return withCookies(res, [clearSessionCookie()]);
 }

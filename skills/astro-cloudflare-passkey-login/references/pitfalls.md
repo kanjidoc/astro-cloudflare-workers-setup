@@ -33,7 +33,7 @@
 | Sign-in fails with the counter error | authenticator reported a counter ≤ the stored one while either is non-zero | a cloned or reset authenticator; revoke the credential (`npm run auth:revoke -- --credential <id8>`) and re-invite |
 | Invite link says "already used" before the person opened it | someone consumed it, or it expired | `npm run auth:list`; revoke unexpected credentials; mint a new invite. GET never consumes an invite, so chat unfurls are harmless |
 | `_headers` rules don't show on 401s, redirects or JSON | `_headers` never applies to Worker-generated responses | the Worker sets them (`src/lib/gate/headers.ts`); `verify_site.py --gated` checks the 401 |
-| A private image loads for a signed-out user from the browser cache | old cache entry | sign-out sends `Clear-Site-Data: "cache"`; gated responses are `private, no-store` / `private, max-age…`; hard refresh once |
+| A private image loads for a signed-out user from the browser cache | old cache entry | gated responses are `private, no-store` / `private, max-age…`; hard refresh once. Sign-out deliberately does not send `Clear-Site-Data` (browsers hold that response until the cache is wiped, leaving the page blank) |
 | Open redirect on the backup host | building the redirect with `new URL(pathname + search, ORIGIN)` treats `//evil` as a host | set `pathname`/`search` on `new URL(ORIGIN)` (`src/lib/gate/redirect.ts`, shipped) |
 | Invite URLs appear in logs | the token is in the path | never log full URLs; the shipped code logs outcome codes and names only |
 | Registration accepted a credential whose id differs from the attestation's | with attestation `'none'`, `info.credential.id` isn't tied to `response.id` | `handlers.ts` requires equality and caps the length (KV keys ≤ 512 bytes) before any KV access, and refuses duplicate credential ids (WebAuthn L3 §7.1) |
@@ -54,5 +54,6 @@
 |---|---|---|
 | `npm run invite` writes to local KV, `auth:list` shows nothing on the live site | wrangler `kv` commands default to **local** | the scripts pass `--remote`; use `--local` only against `npm run preview` |
 | The **first** `npm run invite` on production fails with `… - 404: Not Found` | remote `wrangler kv key get` of a missing key exits 1 with a 404 on stderr, while local prints "Value not found" on stdout | `scripts/auth/kv.mjs` classifies both (`isNotFound`, `isRemoteNotFound`) and rethrows anything else (shipped) |
-| `npm run invite -- "Tony F"` is refused | names must be lowercase `[a-z0-9-]` (they are KV keys) | use a lowercase name listed in `src/data/auth.ts` |
+| Build or `npm run invite` throws `USERS: "…" must be lowercase [a-z0-9-], 1-32 chars` (or `names must be unique`) | `src/data/auth.ts` validates the list at import time: names are KV keys and cookie values | fix the name in `USERS` |
+| Build guard: "names a user" although the name is only the site's name | the guard scans JS string literals, CSS selectors and the lock page `<body>`; the `<head>` (title, og:site_name, JSON-LD) is skipped | move the name out of any stylesheet, script or lock-page body text |
 | `wrangler` opens a browser login | no `$CLOUDFLARE_API_TOKEN` and no saved login | set the token or log in once outside this skill; never `wrangler login` when the token is set |

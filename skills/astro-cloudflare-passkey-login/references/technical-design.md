@@ -1,6 +1,6 @@
 # Passkey sign-in: technical design
 
-Read this only for a deviation from the shipped code or when debugging. The procedure is SKILL.md. Ported from the <site> private sign-in (its branch `feat/private-sign-in`, commit 6330061); `<apex>`, `<backup-host>` and `<user>` stand for the site's own values.
+Read this only for a deviation from the shipped code or when debugging. The procedure is SKILL.md. Ported from the <site> private sign-in (its branch `feat/private-sign-in`, commit 62a9a67); `<apex>`, `<backup-host>` and `<user>` stand for the site's own values.
 
 This document covers how the feature works, not how anything looks. Where a site's own visual layer needs a hook, it names the hook (a data attribute or an event).
 
@@ -66,15 +66,15 @@ The build must keep at least one on-demand route. If every route is prerendered,
 | `src/lib/gate/allowlist.ts` | Pure check of whether a path is public | `isPublicPath(pathname: string): boolean` |
 | `src/lib/gate/classify.ts` | Decides whether an unauthenticated request should get the lock page | `wantsDocument(request: Request): boolean` |
 | `src/lib/gate/headers.ts` | Security headers and cache policy | `applySecurityHeaders(res, opts)`, `applyGatedCache(res, pathname)` |
-| `src/lib/auth/config.ts` | Constants and env reads | `USERS`, `type User` (from `src/data/auth.ts`), TTLs, `authConfig(env): { rpID, origin, backupHost, cookieSecret }` |
+| `src/lib/auth/config.ts` | Constants and env reads | `USERS`, `type User` (from `src/data/auth.ts`), TTLs, `authConfig(env): { rpID, rpName, origin, cookieSecret, kv, limiter } \| null` |
 | `src/lib/auth/encoding.ts` | base64url, hex | `b64url.encode/decode`, `hex(buf)` |
 | `src/lib/auth/crypto.ts` | Random tokens, hashing, HMAC | `randomToken(bytes=32): string`, `sha256Hex(s): Promise<string>`, `hmacSign(key, data)`, `hmacVerify(key, data, sig): Promise<boolean>` (uses `crypto.subtle.verify`, which is constant-time) |
 | `src/lib/auth/cookies.ts` | Parse and serialise cookies | `readCookie(req, name)`, `sessionCookie(token)`, `clearSessionCookie()`, `challengeCookie(value)`, `clearChallengeCookie()` |
-| `src/lib/auth/challenge.ts` | Stateless signed challenge | `sealChallenge(secret, payload): Promise<string>`, `openChallenge(secret, cookie, now): Promise<ChallengePayload \| null>` |
+| `src/lib/auth/challenge.ts` | Stateless signed challenge | `sealChallenge(secret, payload): Promise<string>`, `openChallenge(secret, cookie, now, purpose): Promise<ChallengePayload \| null>` |
 | `src/lib/auth/store.ts` | Typed KV access, the only module that touches `AUTH_KV` | `getSession/putSession/deleteSession`, `getCredential/putCredential`, `getInvite/deleteInvite`, `getUser` |
-| `src/lib/auth/session.ts` | Resolve and create sessions | `resolveSession(req, env): Promise<{ user, keyHash, record } \| null>`, `createSession(env, user, credId, meta): Promise<string /*Set-Cookie*/>` |
+| `src/lib/auth/session.ts` | Resolve and create sessions | `resolveSession(req, kv): Promise<{ user, keyHash, record } \| null>`, `createSession(env, user, credId, meta): Promise<string /*Set-Cookie*/>` |
 | `src/lib/auth/webauthn.ts` | Thin wrappers around SimpleWebAuthn with fixed settings (§5.1) | `authOptions(cfg)`, `verifyAuth(cfg, response, expectedChallenge, cred)`, `regOptions(cfg, user)`, `verifyReg(cfg, response, expectedChallenge)` |
-| `src/lib/auth/http.ts` | Shared endpoint guards | `requireSameOrigin(req, origin)`, `requireJson(req)`, `rateLimit(env, req, bucket)`, `json(body, status)` |
+| `src/lib/auth/http.ts` | Shared endpoint guards | `requireSameOrigin(req, origin)`, `requireJson(req)`, `rateLimit(limiter, req, bucket)`, `json(body, status)` |
 | `src/pages/lock.astro` | Prerendered lock screen (`/lock/`). Unstyled; carries the hooks in §6. | Uses `Layout` with `noindex` (no canonical or `og:url`, since it's served under any URL) |
 | `src/pages/invite/[token].astro` | On-demand invite page (`prerender = false`) | Renders the invite or unavailable variant (§5.3) |
 | `src/pages/auth/signin/options.ts`, `.../signin/verify.ts` | Sign-in endpoints | §5.2 |
@@ -83,13 +83,12 @@ The build must keep at least one on-demand route. If every route is prerendered,
 | `src/pages/auth/session.ts` | Who am I, used after a bfcache restore | `GET` → `200 {user}` or `401` |
 | `src/scripts/auth-flow.ts` | Client state machine shared by lock and invite (§6.1) | `createAuthFlow({ kind, startCeremony, fetchOptions, verify, readyForSuccess? })` |
 | `src/scripts/arrival.ts` | Bundled module on gated pages: the bfcache session check (§6.5) | none |
-| `src/scripts/signout.ts` | Sign-out mechanics: sets `data-auth-state="signing-out"`, waits for the visual layer's optional `readyToLeave()` promise (default: resolves immediately), then POSTs and navigates (§5.4) | none |
+| `src/scripts/signout.ts` | Sign-out mechanics (8 s timeout on the POST, navigate only on 204): sets `data-auth-state="signing-out"`, waits for the visual layer's optional `readyToLeave()` promise (default: resolves immediately), then POSTs and navigates (§5.4) | none |
 | `scripts/auth/kv.mjs` | Wrapper around `npx wrangler kv key …` (`--remote` by default, `--local` for tests) | `put/get/list/del` |
 | `scripts/auth/invite.mjs` | `npm run invite -- <name>` | §8.1 |
 | `scripts/auth/list.mjs` | `npm run auth:list` | §8.1 |
 | `scripts/auth/revoke.mjs` | `npm run auth:revoke -- …` | §8.1 |
 | `tests/unit/*.test.ts` | `node:test` unit tests for pure helpers | §10.1 |
-| `tests/e2e/*.spec.ts`, `playwright.config.ts` | Playwright end-to-end tests | §10.2 |
 | `.dev.vars.example` | Committed template, no real secret | §8.3 |
 
 ### 3.2 Changed files
@@ -98,11 +97,11 @@ The build must keep at least one on-demand route. If every route is prerendered,
 | :-- | :-- |
 | `wrangler.jsonc` | `main: "./src/worker.ts"`, `assets.run_worker_first: true`, `kv_namespaces`, `ratelimits`, `vars`, and a `previews` block (§8.2). Then run `npm run generate-types`. |
 | `worker-configuration.d.ts` | Regenerated: `AUTH_KV: KVNamespace`, `AUTH_RATE_LIMIT: RateLimit`, the vars, and `AUTH_COOKIE_SECRET` |
-| `package.json` | Deps `@simplewebauthn/server@^14`, `@simplewebauthn/browser@^14`. Dev dep `@playwright/test`. Scripts `test`, `test:e2e`, `invite`, `auth:list`, `auth:revoke`. |
+| `package.json` | Deps `@simplewebauthn/server@^14`, `@simplewebauthn/browser@^14`. Scripts `test`, `invite`, `auth:list`, `auth:revoke`. |
 | `.gitignore` | Add `.dev.vars*` and `!.dev.vars.example` (today only `.env*` is covered) |
 | `src/layouts/Layout.astro` | Gets a `chrome` prop; on gated pages (`chrome === 'page'`) it includes `arrival.ts` and `signout.ts`. A sign-out control is any `<button data-auth-action="signout">`. |
 | `public/_headers` | No rule changes. Its comment gains a note that the Worker is now authoritative (§7.4). |
-| `CLAUDE.md`, `CHANGELOG.md`, `ROADMAP.md` | See §12 |
+| `CLAUDE.md`, `CHANGELOG.md` | The skill's Step 12 |
 
 `astro.config.mjs` doesn't change: `output: 'static'`, `session: false` and `imageService: 'compile'` all stay. Setting `prerender = false` on the few routes above is enough (Astro's default "hybrid" behaviour).
 
@@ -174,7 +173,7 @@ After `success`: navigate with `location.replace(sameURL)` (§6.2). The verify r
 | Step | HTTP | Server |
 | :-- | :-- | :-- |
 | Options (prefetched on load) | `POST /auth/invite/options` `{ token }` | Checks and rate limit. Invite must exist (`410` otherwise). Read `user:<name>`. `generateRegistrationOptions({ userID, userName: name, userDisplayName: name, … })`. Challenge cookie `{ p:'reg', i: inviteHash, u: name }`. |
-| Verify | `POST /auth/invite/verify` `{ token, response }` | Checks. The cookie's `i` must equal `sha256(token)` and its `u` must match. Re-read the invite (must still exist). `verifyRegistrationResponse`. `put cred:<id>`, `delete invite:<hash>`, create the session. → `200 { ok: true, user }` |
+| Verify | `POST /auth/invite/verify` `{ token, response }` | Checks. The cookie's `i` must equal `sha256(token)` and its `u` must match. Re-read the invite (must still exist). `verifyRegistrationResponse`. `delete invite:<hash>` first (so a race can't register twice), then `put cred:<id>`, create the session. → `200 { ok: true, user }` |
 
    - A `410` at any point (the invite was used meanwhile) makes the client call `location.reload()`, and the server then renders the unavailable variant.
    - On success: `location.replace('/')`. The verify response sets the arrival cookie (§6.3). The replace means Back never returns to the spent link.
@@ -184,7 +183,7 @@ After `success`: navigate with `location.replace(sameURL)` (§6.2). The verify r
 
 `POST /auth/signout` (same-origin JSON) → the server deletes `session:<hash>` and responds `204` with:
 - `Set-Cookie: __Host-auth-session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`
-- `Clear-Site-Data: "cache"`, which purges gated images kept in the browser cache
+- no `Clear-Site-Data`: browsers hold that response until the cache is wiped, which left the page blank after sign-out. Gated responses are `private, no-store`, so nothing private is cached anyway.
 
 Before the POST, `signout.ts` sets `data-auth-state="signing-out"` and awaits the visual layer's optional `readyToLeave()` (for the fade). After the `204`, the client calls `location.replace('/')`. The Worker serves the lock page at `/` because the cookie is gone. Only the current session is revoked. Other devices stay signed in.
 
@@ -312,7 +311,7 @@ On every gated `text/html` response, the Worker's `HTMLRewriter` sets `<html dat
 | `npm run auth:revoke -- --invite <user>` | Deletes that person's pending invites |
 
 - All KV calls go through `npx wrangler kv key … --binding AUTH_KV --remote`. Wrangler 4 needs `--remote` explicitly, because local is the default for `kv` commands.
-- Scripts accept `--local` for tests and `--preview-ns` for the preview namespace.
+- Scripts accept `--local` for tests and `--preview` for the preview namespace.
 - Nothing prints a session token, the secret or the API token.
 
 ### 8.2 One-time setup (the owner's laptop)
@@ -388,7 +387,7 @@ AUTH_COOKIE_SECRET=replace-with-openssl-rand-base64-32
 | Assertion replay | The challenge is HMAC-bound, 5-minute expiry, cleared after each attempt. The origin check. The counter check (weak for synced passkeys). | The challenge isn't single-use server-side. Replay needs both a captured assertion and the HttpOnly Strict challenge cookie within 5 minutes. Accepted. |
 | Brute force and cost abuse | Rate Limiting binding per IP and bucket. Every endpoint rejects malformed input before any KV write. | Per-location and eventually consistent, so it's a brake, not a quota (F1). Free plan daily limits cap the damage. |
 | Clickjacking | `X-Frame-Options: DENY` (CSP `frame-ancestors` can't be set via `<meta>`) | None |
-| Private assets | Everything outside the allowlist is gated. Images are never public. Gated responses are `private`. Sign-out sends `Clear-Site-Data: "cache"`. | JS and CSS are public by extension, which is why the rule about private content in §7.2 exists |
+| Private assets | Everything outside the allowlist is gated. Images are never public. Gated responses are `private`. Gated responses are never cached (`private, no-store`; hashed assets `private`). | JS and CSS are public by extension, which is why the rule about private content in §7.2 exists |
 | bfcache or back-button exposure after sign-out | §6.5 | None practical |
 | Logging leaks | Log only outcome codes and user names. Never tokens, cookies, assertion bodies or IPs beyond what Workers Observability already records. | — |
 
@@ -444,7 +443,7 @@ AUTH_COOKIE_SECRET=replace-with-openssl-rand-base64-32
 
 ### 10.3 Before merge and after deploy
 
-- `npm run check`, `npm test`, `npm run test:e2e` and `npm run verify` are all clean.
+- `npm run check`, `npm test` and `npm run verify` are all clean.
 - After deploy:
   - `verify_site.py --gated https://<apex>` passes.
   - `curl -sI https://<backup-host>/x` → `301` to `https://<apex>/x`.

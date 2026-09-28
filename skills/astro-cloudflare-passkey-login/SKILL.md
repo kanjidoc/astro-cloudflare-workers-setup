@@ -25,14 +25,14 @@ node -v; grep -c '"assets"' wrangler.jsonc; grep -o '"pattern": "[^"]*"' wrangle
 - **A custom domain is live:** a `routes[].pattern` exists and `curl -sI https://<apex>/` returns 200. Passkeys bind to that host; a site on `*.workers.dev` alone would strand every passkey the day it gets a domain. No domain → run the setup skill's Step 11 first.
 - **Authenticated:** `wrangler whoami` shows an account. Token present → never `wrangler login`. Nothing → 👤 ask the user to set `CLOUDFLARE_API_TOKEN` or log in once.
 - **Node ≥ 22.18** (`.nvmrc` says 24; the unit tests run `.ts` natively).
-- **Clean git tree** (`git status --porcelain` prints nothing). Dirty → 👤 ask the user to commit or stash first; this skill branches and commits.
+- **Clean git tree** (`git status --porcelain` prints nothing) and **`npm run verify` clean** before any change. Dirty → 👤 ask the user to commit or stash first; this skill branches and commits.
 - `src/worker.ts` already present → `references/resume.md`.
 
 ## Confirm inputs (one message)
 
 Read `<apex>` from `routes[].pattern` and `<name>` from `wrangler.jsonc`. `<backup-host>` is `<name>.<subdomain>.workers.dev`: the precondition grep finds it in `public/_headers` (setup Step 11 wrote a noindex block for it). If nothing prints, 👤 ask the user to copy it from the dashboard (Workers & Pages → the Worker → Settings → Domains & Routes). Confirm all three, don't ask. Ask:
 
-1. **Who signs in?** One to ten lowercase names (`[a-z0-9-]`, used as KV keys and in the greeting). Default: the user's first name.
+1. **Who signs in?** One to ten lowercase names (`[a-z0-9-]`, 1–32 chars, used as KV keys and in the greeting; the build refuses anything else). Default: the user's first name. A name may equal the site's name (the guard skips the lock page's `<head>`), but never put a name in a stylesheet, script or the lock page body.
 2. **Any extra public files the lock page will show?** Exact paths only (a logo). Default: none.
 3. Defaults to state, not ask: sessions 24 h fixed (the lock shows about once a day per device), invites 7 days single-use, 10 attempts / 60 s per IP, Face ID / Touch ID / PIN required at every sign-in, Worker Previews only ever show the lock page, `*.workers.dev` redirects to the apex.
 
@@ -72,7 +72,7 @@ grep -rnE '<(apex|backup-host|kv-id|preview-kv-id|user-[0-9]|site-name|extra-pub
 - `wrangler.additions.jsonc` → **targeted Edits** to `wrangler.jsonc`: set `main`, add `run_worker_first` inside the existing `assets`, add `kv_namespaces` (without `id` for now), `ratelimits`, `vars`, `previews`. Never rewrite the file; keep `compatibility_date`, `routes`, `observability` as they are.
 - `package.json`: `"build": "astro check && astro build && node --test tests/build-guard.test.ts"`, `"test": "node --test tests/unit/"`, `"invite": "node scripts/auth/invite.mjs"`, `"auth:list": "node scripts/auth/list.mjs"`, `"auth:revoke": "node scripts/auth/revoke.mjs"`. `verify` and `deploy` are unchanged.
 - `.gitignore`: append `.dev.vars*` and `!.dev.vars.example`.
-- `src/layouts/Layout.astro`: add `chrome?: 'page' | 'none'` to `Props` (default `'page'`), and inside `<body>` render `<script src="../scripts/arrival.ts"></script>` and `<script src="../scripts/signout.ts"></script>` only when `chrome === 'page'`, before `<slot />`. If the site has a header component, add a `<button type="button" data-auth-action="signout">` to it (unstyled). The lock and invite pages pass `chrome="none"`.
+- `src/layouts/Layout.astro`: add `chrome?: 'page' | 'none'` to `Props` (default `'page'`). Everything that is site chrome — header, nav, footer, and the two scripts `<script src="../scripts/arrival.ts"></script>` and `<script src="../scripts/signout.ts"></script>` — renders only when `chrome === 'page'`; `<slot />` always renders. Anonymous visitors see the lock page with `chrome="none"`, so nothing in the chrome (page titles in a nav, a sign-out button) may leak. If the site has a header component, add a `<button type="button" data-auth-action="signout">` to it (unstyled). The lock and invite pages pass `chrome="none"`; make `src/pages/404.astro` pass it too (the Worker serves the site's 404 for unknown `/auth/*` and `/invite/*` paths).
 - `public/_headers`: add the comment `# src/worker.ts runs first and sets these same headers on every response it returns; these rules still reach asset responses, but the Worker is authoritative.`
 - `public/robots.txt`: remove the `Sitemap:` line (the sitemap is behind the gate now; `robots.txt` itself stays public and crawlable).
 - `.dev.vars` (gitignored) from `.dev.vars.example` with `AUTH_COOKIE_SECRET=$(openssl rand -base64 32)`.

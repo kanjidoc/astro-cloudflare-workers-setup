@@ -49,21 +49,32 @@ test('no page is prerendered under /auth or /invite (they must stay on-demand)',
 test('no user name appears in public files', () => {
   // The lock page and every public CSS/JS asset are served with no session at all, so they must
   // never name who can sign in — that would hand a stranger a head start on the passkey prompt.
-  const nameRe = new RegExp(`\\b(${USERS.join('|')})\\b`, 'i');
+  // Scan for a name as a JS string literal, a CSS class/id, or a word in the lock page's <body>;
+  // the <head> is skipped because the site name (title, og:site_name, JSON-LD) may legitimately
+  // contain a person's name, and `Math.max` must not trip a user called "max".
+  const names = USERS.map((n) => n.replace(/-/g, '\\-')).join('|');
+  const literal = new RegExp(`(['"\`])(?:${names})\\1`, 'i');
+  const selector = new RegExp(`[.#](?:${names})(?![\\w-])`, 'i');
+  const word = new RegExp(`\\b(?:${names})\\b`, 'i');
   const astroDir = new URL('dist/client/_astro/', root);
-  const files = readdirSync(astroDir, { withFileTypes: true })
-    .filter(
-      (entry) =>
-        entry.isFile() &&
-        (entry.name.endsWith('.css') || entry.name.endsWith('.js')),
-    )
-    .map((entry) => new URL(entry.name, astroDir));
-  files.push(new URL('dist/client/lock/index.html', root));
-  for (const file of files) {
-    const contents = readFileSync(file, 'utf8');
-    assert.ok(
-      !nameRe.test(contents),
-      `${file.pathname} names a user, but it's public: served with no session`,
-    );
+  for (const entry of readdirSync(astroDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const contents = readFileSync(new URL(entry.name, astroDir), 'utf8');
+    if (entry.name.endsWith('.js'))
+      assert.ok(
+        !literal.test(contents),
+        `_astro/${entry.name} names a user in a string, but it's public: served with no session`,
+      );
+    if (entry.name.endsWith('.css'))
+      assert.ok(
+        !selector.test(contents),
+        `_astro/${entry.name} names a user in a selector, but it's public: served with no session`,
+      );
   }
+  const lock = readFileSync(new URL('dist/client/lock/index.html', root), 'utf8');
+  const body = lock.replace(/^[\s\S]*?<\/head>/i, '');
+  assert.ok(
+    !word.test(body),
+    'the lock page body names a user, but it is public: served with no session',
+  );
 });
