@@ -1,0 +1,283 @@
+---
+// Dev-only design preview at /design/ (`npm run dev`). getStaticPaths returns one path in
+// dev and none in a build, so this page never ships. Self-contained on purpose: the setup
+// skill copies it before Layout.astro exists. Everything shown is read from tokens.css,
+// which `npm run design` generates from DESIGN.md. CSP-clean: no style="" and no
+// define:vars; per-token values are applied by the bundled script below through CSSOM.
+// Once tokens.css exceeds Astro's inline threshold, the build still emits this page's CSS
+// as an unlinked dist/client/_astro/*.css file; harmless, nothing links to it.
+import '../../styles/global.css';
+import tokensCss from '../../styles/tokens.css?raw';
+
+export function getStaticPaths() {
+  return import.meta.env.DEV ? [{ params: { slug: undefined } }] : [];
+}
+
+// First declaration of each variable wins: the :root value, not the dark-scheme override.
+const vars = new Map<string, string>();
+for (const [, name, value] of tokensCss.matchAll(
+  /^\s*--([\w-]+):\s*([^;]+);/gm,
+)) {
+  if (!vars.has(name)) vars.set(name, value.trim());
+}
+const named = (prefix: string) =>
+  [...vars.keys()]
+    .filter((k) => k.startsWith(prefix))
+    .map((k) => k.slice(prefix.length));
+const colorNames = named('color-');
+const colors = colorNames
+  .filter((n) => !(n.endsWith('-dark') && colorNames.includes(n.slice(0, -5))))
+  .map((n) => ({
+    name: n,
+    light: vars.get(`color-${n}`)!,
+    dark: vars.get(`color-${n}-dark`),
+  }));
+const typeStyles = [...tokensCss.matchAll(/^\.type-([\w-]+)\s*\{/gm)].map(
+  (m) => m[1],
+);
+const spacing = named('spacing-');
+const rounded = named('rounded-');
+const empty = vars.size === 0;
+const hasDark = colors.some((c) => c.dark);
+
+// Sample-page roles use the recommended DESIGN.md names when they exist.
+const type = (name: string) =>
+  typeStyles.includes(name) ? `type-${name}` : undefined;
+const sampleClass = ['sample', !empty && 'themed', type('body-md')]
+  .filter(Boolean)
+  .join(' ');
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Design preview</title>
+  </head>
+  <body>
+    <main>
+      <h1>Design preview</h1>
+      <p>
+        Read from <code>src/styles/tokens.css</code>, which{' '}
+        <code>npm run design</code> generates from <code>DESIGN.md</code>. This
+        page exists only under <code>npm run dev</code>.
+      </p>
+      {empty && (
+        <p>
+          <strong>DESIGN.md has no values yet.</strong> The sample page below
+          shows browser defaults.
+        </p>
+      )}
+      {hasDark && (
+        <p>
+          Switch your system to dark mode to see the dark scheme applied to the
+          sample page.
+        </p>
+      )}
+
+      {colors.length > 0 && (
+        <section>
+          <h2>Colors</h2>
+          <ul class="grid">
+            {colors.map((c) => (
+              <li>
+                <span
+                  class="chip"
+                  data-prop="background-color"
+                  data-value={c.light}
+                />
+                {c.dark && (
+                  <span
+                    class="chip"
+                    data-prop="background-color"
+                    data-value={c.dark}
+                  />
+                )}
+                <code>--color-{c.name}</code>
+                <small>
+                  {c.dark ? `${c.light} / dark ${c.dark}` : c.light}
+                </small>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {typeStyles.length > 0 && (
+        <section>
+          <h2>Type scale</h2>
+          {typeStyles.map((name) => (
+            <div class="row">
+              <code>.type-{name}</code>
+              <p class={`type-${name}`}>
+                The quick brown fox jumps over the lazy dog 0123456789
+              </p>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {spacing.length > 0 && (
+        <section>
+          <h2>Spacing</h2>
+          {spacing.map((k) => (
+            <div class="row">
+              <code>
+                --spacing-{k}: {vars.get(`spacing-${k}`)}
+              </code>
+              <span
+                class="bar"
+                data-prop="inline-size"
+                data-value={`var(--spacing-${k})`}
+              />
+            </div>
+          ))}
+        </section>
+      )}
+
+      {rounded.length > 0 && (
+        <section>
+          <h2>Rounded</h2>
+          <ul class="grid">
+            {rounded.map((k) => (
+              <li>
+                <span
+                  class="corner"
+                  data-prop="border-radius"
+                  data-value={`var(--rounded-${k})`}
+                />
+                <code>
+                  --rounded-{k}: {vars.get(`rounded-${k}`)}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <h2>Sample page</h2>
+      <article class={sampleClass}>
+        <h1 class={type('headline-display')}>A headline that sets the tone</h1>
+        <p class={type('body-lg')}>
+          Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do
+          eiusmod tempor incididunt ut labore et dolore magna aliqua, with{' '}
+          <a href="#sample">a link in the text</a> and{' '}
+          <strong>some bold words</strong>.
+        </p>
+        <h2 class={type('headline-lg')}>A section heading</h2>
+        <p>
+          Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris
+          nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in
+          reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla
+          pariatur. Excepteur sint occaecat cupidatat non proident.
+        </p>
+        <h3 class={type('headline-md')}>A smaller heading</h3>
+        <ul>
+          <li>A first list item</li>
+          <li>
+            A second item with <a href="#sample">a link</a>
+          </li>
+          <li>
+            A third, longer item that wraps onto a second line on a narrow
+            screen
+          </li>
+        </ul>
+        <form id="sample">
+          <label class={type('label-md')} for="sample-email">
+            Email
+          </label>
+          <div class="field">
+            <input
+              id="sample-email"
+              type="email"
+              placeholder="you@example.com"
+            />
+            <button class={type('label-lg')} type="button">
+              Subscribe
+            </button>
+          </div>
+          <small class={type('body-sm')}>
+            Small print in the smallest body style.
+          </small>
+        </form>
+      </article>
+    </main>
+
+    <script>
+      // CSSOM writes are allowed under the hashed CSP (only style="" attributes are blocked).
+      for (const el of document.querySelectorAll<HTMLElement>('[data-prop]')) {
+        el.style.setProperty(el.dataset.prop!, el.dataset.value!);
+      }
+    </script>
+  </body>
+</html>
+
+<style>
+  main {
+    max-inline-size: 60rem;
+    margin-inline: auto;
+    padding: 1rem;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: 1rem;
+    padding: 0;
+    list-style: none;
+  }
+  .grid li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    align-items: center;
+  }
+  .grid code,
+  .grid small {
+    flex-basis: 100%;
+  }
+  .chip,
+  .corner {
+    display: inline-block;
+    inline-size: 4rem;
+    block-size: 3rem;
+    border: 1px solid;
+  }
+  .row {
+    margin-block: 1rem;
+  }
+  .bar {
+    display: block;
+    block-size: 0.75rem;
+    background: currentColor;
+  }
+  .sample {
+    padding: 1.5rem;
+    border: 1px dashed;
+  }
+  .themed {
+    background: var(--color-surface, Canvas);
+    color: var(--color-on-surface, CanvasText);
+  }
+  .themed a {
+    color: var(--color-primary, LinkText);
+  }
+  .themed button {
+    background: var(--color-primary, ButtonFace);
+    color: var(--color-on-primary, ButtonText);
+    border: 0;
+    border-radius: var(--rounded-md, 0);
+    padding: var(--spacing-sm, 0.5rem) var(--spacing-md, 1rem);
+  }
+  .themed input {
+    border-radius: var(--rounded-sm, 0);
+    padding: var(--spacing-sm, 0.5rem);
+  }
+  .field {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-block: 0.5rem;
+  }
+</style>

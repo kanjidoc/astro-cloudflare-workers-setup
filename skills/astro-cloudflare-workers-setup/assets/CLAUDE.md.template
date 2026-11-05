@@ -18,7 +18,8 @@ Live at **https://<canonical-domain>** (the `*.workers.dev` URL if there is no c
 | `npm run check` | `astro check` type-check. |
 | `npm run build` | `astro check && astro build` → `dist/client/` (static assets + the generated `wrangler.json`). `dist/server/` is filled only once a page opts into on-demand rendering. Type errors fail the build, locally and in CI. |
 | `npm run preview` | Serves the production build (CSP and `_headers` active). Backgrounds itself under an agent — stop with `npx astro preview stop` (`ASTRO_PREVIEW_BACKGROUND=0` runs it in the foreground). |
-| `npm run verify` | `build` + `wrangler deploy --dry-run` — no login, nothing deployed. Expect `0 errors`, `[build] Complete!`, `No bindings found.` |
+| `npm run verify` | `design:check` + `build` + `wrangler deploy --dry-run` — no login, nothing deployed. Expect the `tokens.css:` summary line, `0 errors`, `[build] Complete!`, `No bindings found.` |
+| `npm run design` | Regenerate `src/styles/tokens.css` from `DESIGN.md`. Run after every `DESIGN.md` edit and commit both files (`npm run design:check` reports drift). |
 | `npm run deploy` | `build` + `wrangler deploy` from a laptop. **Pushing to `main` is the primary deploy path**; this is the fallback. |
 | `npm run generate-types` | Regenerate `worker-configuration.d.ts`. **Run after any `wrangler.jsonc` change.** |
 
@@ -39,10 +40,26 @@ Live at **https://<canonical-domain>** (the `*.workers.dev` URL if there is no c
 
 - Every page uses `src/layouts/Layout.astro`.
 - **Reusable UI → `src/components/`** (Astro's standard). **Content model:** fixed data (site info, links) lives in typed `as const` modules under `src/data/`; collection content (blog posts, projects) lives in **Astro Content Collections** (`src/content.config.ts`). Editing content means editing a data module or a collection entry — never page markup.
-- The site ships with **no opinionated styling** — no baked-in colors, fonts, or layout. `src/styles/global.css` (imported by `Layout.astro`) holds only the universal reset (`box-sizing`, responsive images) and is the home for site-wide CSS; scoped `<style>` blocks for component styles. Styling is a deliberate decision, not inherited.
+- The site starts with **no opinionated styling**; all styling comes from `DESIGN.md` (see *Design system*). `src/styles/global.css` (imported by `Layout.astro`) holds the `tokens.css` import, the universal reset (`box-sizing`, responsive images) and, once designed, base rules that use tokens only; scoped `<style>` blocks for component styles.
 - Semantic HTML — `<header>`, `<main>`, `<nav>`, `<footer>`, `<article>`, `<section>` over `<div>`. `<main>` and `<footer>` are siblings, never nested.
 - **Astro 7 whitespace** — `compressHTML: 'jsx'` strips whitespace between elements on separate lines (`<span>a</span>`⏎`<em>b</em>` renders "ab"). Keep inline text and links on one line, or insert `{" "}`. The compiler also rejects unclosed tags.
 - WCAG 2.2 AA — visible `:focus-visible` rings not obscured by sticky UI, text contrast ≥ 4.5:1, touch targets ≥ 24×24 CSS px, the LCP image is never `loading="lazy"`.
+
+## Design system
+
+- **`DESIGN.md`** (repo root, in the [google-labs-code/design.md](https://github.com/google-labs-code/design.md) format) is the source of truth for the look: its tokens are normative, its prose gives context. **Read it before any visual work.** While it is an empty stub the site stays on browser defaults.
+- **`src/styles/tokens.css` is generated** — `npm run design` writes it from `DESIGN.md` via `scripts/design-tokens.mjs` (CSS variables `--color-*`, `--spacing-*`, `--rounded-*`, `--type-*`, plus `.type-*` text-style classes); `global.css` imports it first. **Never hand-edit it.** `npm run design:check` runs inside `verify` and fails when it is out of date.
+- **CSP** — the hashed CSP blocks inline `style=""` attributes and `define:vars`: style components in scoped `<style>` blocks with `var(--…)`.
+- **Fonts** — only through Astro's Fonts API (see *Architecture*), never `@fontsource` or a `<link>` to a font host.
+- **Where design files go:**
+  - `src/assets/brand/` — marks and raster originals Astro may optimize.
+  - `src/assets/fonts/` — self-hosted font files and their licence.
+  - `src/assets/images/` — photography used on pages.
+  - `public/brand/` — only when a file needs a stable public URL.
+  - `design/` — references, PDFs, screenshots, mood boards; never deployed. `design/README.md` records what came from where and how derived files were made.
+- **`/design/`** — a dev-only preview of the palette, type scale, spacing and a sample page (`npm run dev`); absent from every build, so it 404s in production by design.
+- **Site choices that override `DESIGN.md`:** (none yet)
+- **To create or change the design**, run the `astro-cloudflare-design` skill from the plugin — or edit `DESIGN.md`, run `npm run design`, and commit both files.
 
 ## Workflow
 

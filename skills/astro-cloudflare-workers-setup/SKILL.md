@@ -44,7 +44,7 @@ A greenfield static site, or resuming/productionizing one whose foundation exist
 
 | Phase | Goal |
 |---|---|
-| **A — Foundation** (Steps 1–9) | Project folder → `npm run verify` clean (type check, build, `wrangler deploy --dry-run`). |
+| **A — Foundation** (Steps 1–9) | Project folder → `npm run verify` clean (design tokens, type check, build, `wrangler deploy --dry-run`). |
 | **B — First Deploy** (Step 10) | Live on `*.workers.dev`. Needs a Cloudflare login unless wrangler is already authenticated. |
 | **C — Productionization** (Steps 11–16) | Custom domain, GitHub auto-deploy, content, SEO, fonts, headers, accessibility, analytics. |
 | **D — Project setup for Claude Code** (Step 17) | `README.md`, `CLAUDE.md`, `CHANGELOG.md`, `ROADMAP.md`. |
@@ -100,7 +100,7 @@ Gather these before any irreversible command (batch them for an experienced user
 8. **Landing-page content** — gathered in detail at Step 13; don't invent copy.
 9. **⚠️ Anonymity posture — this is a fork.** A normal indexable site (default), **or** a stealth/coming-soon page that must not be discovered yet? Stealth changes Steps 1, 2, 4, 11 and 13–14 — if chosen, **read `references/anonymity-variant.md` now, before Step 1** (private repo, vague description). Flag it clearly to the user and announce that the variant is active.
 
-The answers are written to `.claude/setup-inputs.json` right after Step 2 — not before.
+The answers are written to `.claude/setup-inputs.json` inside Step 2, right after the scaffold — never before. `locale` follows the language (`en` → `en_US`); `analytics` starts as `pending` unless already answered.
 
 ---
 
@@ -165,10 +165,10 @@ Expect `astro@7` (≥7.4), `@astrojs/cloudflare@14` (≥14.4), `wrangler@4` (≥
 Install the remaining dependencies in one line (stealth: drop `npm i @astrojs/sitemap &&`):
 
 ```bash
-npm i @astrojs/sitemap && npm i -D @astrojs/check typescript@6 @types/node@26 prettier prettier-plugin-astro
+npm i @astrojs/sitemap && npm i -D @astrojs/check typescript@6 @types/node@26 prettier prettier-plugin-astro yaml
 ```
 
-`@astrojs/check` + `typescript` let `astro check` run without an interactive prompt; `@types/node` matches `.nvmrc`. `typescript@6` (npm resolves 6.x and writes `^6.x.y`; an unquoted `^` can be a zsh glob): `@astrojs/check` (peer `^5 || ^6`) refuses TypeScript 7, the Go port with no JS API, which a bare `typescript` would install. Then Write the complete `astro.config.mjs` (it replaces what the adapter left):
+`@astrojs/check` + `typescript` let `astro check` run without an interactive prompt; `@types/node` matches `.nvmrc`; `yaml` for the design generator. `typescript@6` (npm resolves 6.x and writes `^6.x.y`; an unquoted `^` can be a zsh glob): `@astrojs/check` (peer `^5 || ^6`) refuses TypeScript 7, the Go port with no JS API, which a bare `typescript` would install. Then Write the complete `astro.config.mjs` (it replaces what the adapter left):
 
 ```js
 // @ts-check
@@ -225,10 +225,10 @@ npm run generate-types
 ### Step 7 — Scripts + version
 
 ```bash
-npm pkg set scripts.build="astro check && astro build" scripts.check="astro check" scripts.deploy="npm run build && wrangler deploy" scripts.verify="npm run build && wrangler deploy --dry-run" version=0.1.0
+npm pkg set scripts.build="astro check && astro build" scripts.check="astro check" scripts.deploy="npm run build && wrangler deploy" scripts.design="node scripts/design-tokens.mjs" scripts.design:check="node scripts/design-tokens.mjs --check" scripts.verify="npm run design:check && npm run build && wrangler deploy --dry-run" version=0.1.0
 ```
 
-`build` type-checks first, so a type error fails CI instead of shipping. `verify` is the "deploy-ready?" check for this and every later session. Keep the scaffold's `dev`, `preview`, `astro` and the adapter's `generate-types`. Don't add a `wrangler dev` script — `astro dev` and `astro preview` already run in workerd.
+`build` type-checks first, so a type error fails CI instead of shipping. `verify` is the "deploy-ready?" check for this and every later session; its `design:check` fails when `src/styles/tokens.css` lags `DESIGN.md` (`design` regenerates it; the Step 8 stub passes). Keep the scaffold's `dev`, `preview`, `astro` and the adapter's `generate-types`. Don't add a `wrangler dev` script — `astro dev` and `astro preview` already run in workerd.
 
 ### Step 8 — Project hygiene
 
@@ -236,20 +236,25 @@ Copy the files that are the same for every site, then append the ignore entries:
 
 ```bash
 cp -R "${CLAUDE_SKILL_DIR}/assets/site/." .
+cp -R "${CLAUDE_SKILL_DIR}/../astro-cloudflare-design/assets/site/." .
 for l in .wrangler/ '.env*' '!.env.example' .claude/settings.local.json .claude/setup-inputs.json; do grep -qxF "$l" .gitignore || echo "$l" >> .gitignore; done
 ```
 
-**Run the copy once, here** — it overwrites, so on resume it runs only if `.nvmrc` is absent. The ignore loop is idempotent. The copy adds:
+**Run the copies once, here** — they overwrite, so on resume they run only if `.nvmrc` is absent. The ignore loop is idempotent. The copies add:
 
 - **`.nvmrc`** — `26` (Workers Builds installs that major; its default is 24). Keep the scaffold's `engines` as written.
 - **`.editorconfig`** and **`.prettierrc`** (Prettier + `prettier-plugin-astro`, installed at Step 4; `singleQuote` matches the code this skill writes).
-- **`src/styles/global.css`** — the universal reset only (Step 13).
+- **`src/styles/global.css`** — the universal reset only, after `@import './tokens.css'` (Step 13).
+- **`DESIGN.md`** (empty stub, Google's design.md format) and **`design/README.md`** (never-deployed reference folder).
+- **`scripts/design-tokens.mjs`** → **`src/styles/tokens.css`** — the generator and its output, empty until `DESIGN.md` has values.
+- **`src/pages/design/`** — dev-only design preview (`/design/` under `npm run dev`; absent from builds).
+- **`.prettierignore`** — keeps Prettier off `tokens.css` and `DESIGN.md`.
 - **`public/_headers`** — security headers and immutable `/_astro/*` caching (Step 14).
 - **`.github/dependabot.yml`** — weekly updates, grouped (Astro + Cloudflare packages together, dev tooling together), with `typescript` majors ignored (see Step 4).
 - **`.mcp.json`** — the Cloudflare and Astro docs MCP servers (no auth).
 - **`.claude/settings.json`** — scoped allows for routine commands (`npm run *`, `npx astro *`, the dry-run, `git add/commit/push`, docs fetches); a real `wrangler deploy` still asks. Broad personal allows belong in the gitignored `.claude/settings.local.json`.
 
-The scaffold's `.gitignore` covers only `.env` and `.env.production` — hence `.env*` (keeping `.env.example` committable); it already ships `.vscode/`. Do **not** ignore `worker-configuration.d.ts`. **Commit `package-lock.json`** — Workers Builds and reproducible installs need it.
+The scaffold's `.gitignore` covers only `.env` and `.env.production` — hence `.env*` (keeping `.env.example` committable); the scaffold also ships a `.vscode/` folder, which is committed. Do **not** ignore `worker-configuration.d.ts`. **Commit `package-lock.json`** — Workers Builds and reproducible installs need it.
 
 > Everything worth backing up *is* committed; ignored entries are build artifacts, restorable `node_modules`, secrets and per-machine settings. Keep secrets out of git even in a private repo (Cloudflare's secret store and a password manager); if env vars are used, commit a `.env.example` (keys only).
 
@@ -259,7 +264,7 @@ The scaffold's `.gitignore` covers only `.env` and `.env.production` — hence `
 rm -rf dist .wrangler && npm run verify   # no auth needed
 ```
 
-Expect `0 errors` (astro check), `[build] Complete!`, then from the dry-run: `Using redirected Wrangler configuration` / `Configuration being used: "dist/client/wrangler.json"`, `Read N files from the assets directory …/dist/client`, and `No bindings found.` No Worker script, so no `env.ASSETS`. If `env.SESSION` or `env.IMAGES` appears, `session: false` or `imageService: 'compile'` is missing.
+Expect, after npm's script banners, the generator's `tokens.css: no values yet (DESIGN.md is a stub)` line, then `0 errors` (astro check), `[build] Complete!`, then from the dry-run: `Using redirected Wrangler configuration` / `Configuration being used: "dist/client/wrangler.json"`, `Read N files from the assets directory …/dist/client`, and `No bindings found.` No Worker script, so no `env.ASSETS`. If `env.SESSION` or `env.IMAGES` appears, `session: false` or `imageService: 'compile'` is missing.
 
 Offer a first look: `npm run dev` (under Claude Code, Astro backgrounds it and prints the URL, usually `http://localhost:4321` — give the user that). When they're done, run `npx astro dev stop` (`npx astro dev status` / `logs` for debugging; `ASTRO_DEV_BACKGROUND=0` opts out, `ASTRO_PREVIEW_BACKGROUND=0` for `npm run preview`; `pkill` does not stop it). Then tell them: "Phase A done — the site builds and runs locally, ready to deploy." See `references/pitfalls.md` for any error.
 
@@ -384,9 +389,7 @@ Re-run the `gh api` line every ~30 s (Monitor or a background until-loop; Monito
 - **Reusable UI → `src/components/`** — Astro's standard; build pages from small components.
 - **Content model — by site shape:** *a one-pager or a few unique pages* (this skill's default) → keep copy/links in **typed `.ts` modules under `src/data/`** (`as const`); Astro advises *against* Content Collections for just a few pages. *A blog, docs, or any collection of like content* → **Astro Content Collections** (`src/content.config.ts`, `defineCollection` from `astro:content`, a `glob()` loader from `astro/loaders`, Zod schemas with `z` from `astro/zod`; query with `getCollection()`; render via `src/pages/blog/[...slug].astro`). RSS: `npm install @astrojs/rss` plus `src/pages/rss.xml.js` returning `rss({ title, description, site: context.site, items })`, and `<link rel="alternate" type="application/rss+xml" href="/rss.xml">` in the head. Astro 7 renders Markdown with Sätteri; remark/rehype plugins need `@astrojs/markdown-remark` and `markdown: { processor: unified() }`.
 
-**`src/styles/global.css`** (copied at Step 8) holds only a universal reset (`box-sizing`, responsive images): a wired-up home for site-wide styles with **no visual decisions baked in** — no colors, fonts, type scale or layout to undo. The page is structurally complete, semantic and accessible on browser defaults.
-
-**Hand off the design.** A user who sees their live site unstyled may think something broke: tell them it's *by design, not broken* (nothing to fight later), and give the on-ramp: *"When you want it styled, ask me — describe the look, or say 'design my site' — and I'll build it on this structure."* (Claude can use the `frontend-design` skill.)
+**`src/styles/global.css`** (copied at Step 8) holds only the `tokens.css` import (empty until `DESIGN.md` has values) and a universal reset (`box-sizing`, responsive images): a wired-up home for site-wide styles with **no visual decisions baked in** — no colors, fonts, type scale or layout to undo. The page is structurally complete, semantic and accessible on browser defaults.
 
 **`src/layouts/Layout.astro`** — imports `global.css`, sets `<html lang>`, and carries the head metadata:
 
@@ -452,12 +455,12 @@ Sitemap: https://<canonical-domain>/sitemap-index.xml
 
 Optional (custom domain only): to opt out of AI training, 👤 `<zone> → Security → Settings` (filter **Bot traffic**) `→ AI Crawler and Agent access policies`: Training = Disallow + **Enable Bot Preference Sync** (or the Managed robots.txt toggle in `AI Crawl Control → Quick Actions`). Cloudflare then prepends a managed block to the live `robots.txt` — expected; the verifier tolerates it.
 
-**Images** — `og.webp`, `apple-touch-icon.png` and `favicon.ico` came from Step 2; re-run `gen-images.mjs` only if the site name or tagline changed. For a photo or logo card, replace `public/og.webp` with a 1200×630 image and pass `--no-og` on any re-run. **`public/.well-known/security.txt`** (optional) — `Contact:` + `Expires:`.
+**Images** — `og.webp`, `apple-touch-icon.png` and `favicon.ico` came from Step 2; re-run `gen-images.mjs` only if the site name or tagline changed. If Claude drew the mark, note in `design/README.md` Provenance: `public/favicon.svg` drawn by Claude. For a photo or logo card, replace `public/og.webp` with a 1200×630 image and pass `--no-og` on any re-run. **`public/.well-known/security.txt`** (optional) — `Contact:` + `Expires:`.
 
 **Step 13 completion check** — confirm `public/og.webp` (not for stealth), `public/apple-touch-icon.png`, `public/favicon.svg`, `public/favicon.ico`, `src/pages/404.astro`, `src/styles/global.css`, `src/data/site.ts` exist. Then the placeholder-leak check — **passing = no output** (grep then exits 1, or 2 before Step 17 creates `CLAUDE.md`; neither is an error):
 
 ```bash
-grep -rInE '\{\{|<(repo-name|domain|canonical-domain|lang|locale|site-name|Site Name|tagline|token|description|worker-name|account-subdomain|workers\.dev host|today YYYY-MM-DD|skill-dir|placeholder|github-repo-URL|name / purpose / type|Cloudflare Registrar / external)>' src public astro.config.mjs wrangler.jsonc CLAUDE.md README.md 2>/dev/null
+grep -rInE '\{\{|<(repo-name|domain|canonical-domain|lang|locale|site-name|Site Name|tagline|token|description|font|role|Family|worker-name|account-subdomain|workers\.dev host|today YYYY-MM-DD|skill-dir|placeholder|github-repo-URL|name / purpose / type|Cloudflare Registrar / external)>' src public astro.config.mjs wrangler.jsonc CLAUDE.md README.md 2>/dev/null
 ```
 
 Then the **local check** — the same sequence ends Steps 13, 14 and 16. It formats what Claude wrote first, so the user's editor never reformats it later:
@@ -470,6 +473,8 @@ npx astro preview stop
 ```
 
 Use the URL the preview prints. Expect 0 FAIL; SKIPs are checks that need the live host; a "Hashed asset … nothing to verify" WARN is normal on a page with no bundled JS, `<Image>` or fonts; the analytics WARN clears at Step 16 (it stays if analytics is declined). **Stealth:** add `--stealth` here and in Steps 14/16 — never remove the noindex layers to clear a standard-mode FAIL. Commit the step's work: `git add -A && git commit -m "Add landing page, layout, SEO metadata and robots.txt"` (Step 17 pushes it).
+
+**Hand off the design.** A user who sees their live site unstyled may think something broke: tell them it's *by design, not broken* (nothing to fight later). Give the on-ramp: *"When you want it styled — now, later, or another day — say 'design my site' and bring anything (files, links, examples, a mood) or nothing."* The `astro-cloudflare-design` skill then writes `DESIGN.md`, generates the CSS and styles the site, and offers dark mode.
 
 For a **stealth** site, this step changes — `references/anonymity-variant.md`.
 
@@ -559,7 +564,7 @@ The skill is **finished** when every Phase A–D step is done and the live site 
 > - **Repository:** <github-repo-URL>
 > - **Auto-deploy:** every `git push` to `main` rebuilds and publishes within a couple of minutes; PRs and other branches get a Preview (URL posted as a PR comment). You never run a deploy command again.
 > - **Edit your content:** open a file in `src/data/` — e.g. to change the headline, edit the text between the quotes in `src/data/site.ts` and save. Preview locally with `npm run dev` (→ localhost:4321), then `git add -A && git commit -m "update" && git push` — live within a couple of minutes. (A blog post: add a file under `src/content/`.)
-> - **Design it:** your site is intentionally plain — no styling was baked in, so nothing fights you. Ask me "design my site" or describe the look you want, and I'll style it on this structure. Nothing is broken.
+> - **Design it:** your site is plain on purpose — nothing is broken. Whenever you like, say "design my site" and bring anything or nothing; dark mode is on offer.
 > - **The repo documents itself:** `README.md`, `CLAUDE.md`, `CHANGELOG.md`, `ROADMAP.md`.
 > - **Handled — you don't think about these again:** hosting is free on Cloudflare's edge; HTTPS is automatic and renews itself; security headers and a real 404 are set; Dependabot keeps dependencies current via automatic PRs; your whole site is backed up in GitHub (laptop dies → nothing lost); if a build ever fails, the commit shows a red ✗ in GitHub and the previous version stays live.
 > - **Verified:** `verify_site.py` confirmed HTTPS + Cloudflare, security headers, CSP, SEO/OG/JSON-LD, sitemap, the custom 404, and — if Web Analytics is on — that its beacon is present and allowed by the CSP. *Stealth — instead: HTTPS + Cloudflare, security headers, CSP, the `noindex` meta + `X-Robots-Tag`, a crawlable `robots.txt`, and the custom 404.*
@@ -604,6 +609,7 @@ Not part of setup. Once the site is live on its custom domain, the sibling skill
 | `@astrojs/check` / `typescript` | 0.9.12 / 6.0.3 | TS ^6 (TS 7 unsupported by `astro check`) |
 | `@types/node` | 26.6.6 | matches `.nvmrc` major |
 | `sharp` | 0.35.5 | ^0.35.4 (astro optional dep) |
+| `yaml` | 2.9.1 | 2.x (design generator) |
 | Node | 26 LTS (`.nvmrc`); tested on 26.10 | 22.23.4 (preflight FAILs below it) |
 | Python (scripts) | 3.9.6 | 3.9 |
 | Claude Code | 2.1.318 | — |

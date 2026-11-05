@@ -3,16 +3,31 @@
  * gen-images.mjs — raster icons + Open Graph card from public/favicon.svg.
  *
  * Usage (run from the project root, the folder with package.json):
- *     node "<skill-dir>/scripts/gen-images.mjs" "<Site Name>" "<tagline>" [--no-og]
+ *     node "<skill-dir>/scripts/gen-images.mjs" "<Site Name>" "<tagline>" [--no-og] [--no-design]
  *
  * Reads public/favicon.svg (the brand mark; never modified) and writes, overwriting
  * only these generated files:
  *     public/favicon.ico           PNG frames 16/32/48/64
  *     public/apple-touch-icon.png  180x180
- *     public/og.webp               1200x630 neutral text card (skipped with --no-og;
+ *     public/og.webp               1200x630 text card (skipped with --no-og;
  *                                  use it for stealth sites or a user-supplied og.webp)
  * The site name is required unless --no-og is given; the tagline is optional.
- * Re-running with the same inputs produces byte-identical files.
+ * Re-running with the same inputs (arguments, mark, tokens.css) produces byte-identical files.
+ *
+ * Brand colors (--design, the default): when src/styles/tokens.css exists (written by
+ * the site's `npm run design` from DESIGN.md), the card takes its colors from the first
+ * `:root` block (anything after the first @media, i.e. the dark scheme, is ignored):
+ *     background --color-primary, text --color-on-primary;
+ *     else       --color-surface, text --color-on-surface;
+ *     else       the neutral black-on-white card.
+ * A value of `var(--color-x)` resolves one level. Only OPAQUE literal colors are used as
+ * SVG fills: #rgb/#rrggbb, or rgb()/rgba()/hsl()/hsla() with no alpha (no `/`, no fourth
+ * argument). Anything else (#rgba/#rrggbbaa, an alpha, another color syntax) counts as
+ * absent: a background falls through to the next pair, then to the neutral card. With no
+ * usable on-color, the text is black or white by the background's luminance (hex
+ * backgrounds only; a non-hex background without one skips to the next pair).
+ * --no-design keeps the neutral card. The card's typeface is always the system sans: sharp renders SVG text
+ * with system fonts, not the site's web fonts. The mark itself is never recolored.
  *
  * Uses the project's own sharp (an optional dependency of astro) and installs nothing.
  * This is the skill's one Node script: rasterizing SVG needs sharp, which the Python
@@ -28,8 +43,9 @@ import { createRequire } from 'node:module';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const USAGE = 'usage: node gen-images.mjs "<Site Name>" "<tagline>" [--no-og]';
+const USAGE = 'usage: node gen-images.mjs "<Site Name>" "<tagline>" [--no-og] [--no-design]';
 const MARK = 'public/favicon.svg';
+const TOKENS = 'src/styles/tokens.css';
 const ICO_SIZES = [16, 32, 48, 64];
 // A fragment of the path data in create-astro's default favicon.svg. If the scaffold's
 // logo changes, this check silently stops matching; it is a guard, not a guarantee.
@@ -41,11 +57,14 @@ const die = (code, msg) => {
 };
 
 // ---- Arguments ----------------------------------------------------------------
+const FLAGS = ['--no-og', '--design', '--no-design'];
 const args = process.argv.slice(2);
 const noOg = args.includes('--no-og');
-const unknownFlag = args.find((a) => a.startsWith('--') && a !== '--no-og');
+const noDesign = args.includes('--no-design');
+const unknownFlag = args.find((a) => a.startsWith('--') && !FLAGS.includes(a));
 if (unknownFlag) die(2, `error: unknown option ${unknownFlag}\n${USAGE}`);
-const positional = args.filter((a) => a !== '--no-og');
+if (noDesign && args.includes('--design')) die(2, `error: --design and --no-design are exclusive\n${USAGE}`);
+const positional = args.filter((a) => !FLAGS.includes(a));
 if (positional.length > 2) die(2, `error: too many arguments (quote the name and tagline)\n${USAGE}`);
 const name = (positional[0] ?? '').trim();
 const tagline = (positional[1] ?? '').trim();
@@ -63,6 +82,53 @@ try {
 } catch (err) {
   if (err.code === 'MODULE_NOT_FOUND') die(2, 'error: sharp not found in this project — run: npm i -D sharp');
   die(2, `error: sharp is installed but failed to load (${err.message}) — try: npm i -D sharp`);
+}
+
+// ---- OG card colors ------------------------------------------------------------
+const NEUTRAL = { bg: '#ffffff', name: '#111111', tag: '#555555', tagOpacity: 1, source: 'neutral card' };
+const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i; // opaque only: no #rgba / #rrggbbaa
+const FUNC = /^(?:rgba?|hsla?)\(\s*[0-9a-z.%\s,+-]+\)$/i; // no `/`: that introduces alpha
+// A function's arguments, comma- or space-separated; a fourth one is alpha.
+const opaqueFunc = (v) => {
+  const inner = v.slice(v.indexOf('(') + 1, -1).trim();
+  return FUNC.test(v) && (inner.includes(',') ? inner.split(',') : inner.split(/\s+/)).length === 3;
+};
+const literal = (v) => (v && (HEX.test(v) || opaqueFunc(v)) ? v : null);
+
+// Relative luminance (WCAG) of a hex color; black text above the crossover, white below.
+function textFor(hex) {
+  let h = hex.slice(1);
+  if (h.length <= 4) h = [...h].map((c) => c + c).join('');
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const c = parseInt(h.slice(i, i + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.179 ? '#000000' : '#ffffff';
+}
+
+function cardColors() {
+  if (noDesign || !existsSync(TOKENS)) return NEUTRAL;
+  // The light scheme: the text before the first @media, comments removed.
+  const css = readFileSync(TOKENS, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').split('@media')[0];
+  const raw = (prop) => css.match(new RegExp(`(?<![\\w-])${prop}\\s*:\\s*([^;}]+)[;}]`))?.[1].trim();
+  const value = (prop) => {
+    const v = raw(prop);
+    const ref = v?.match(/^var\(\s*(--[\w-]+)\s*(?:,[^)]*)?\)$/);
+    return literal(ref ? raw(ref[1]) : v);
+  };
+  for (const [bgProp, onProp] of [
+    ['--color-primary', '--color-on-primary'],
+    ['--color-surface', '--color-on-surface'],
+  ]) {
+    const bg = value(bgProp);
+    if (!bg) continue;
+    const on = value(onProp);
+    if (!on && !HEX.test(bg)) continue;
+    const text = on ?? textFor(bg);
+    const source = `${bgProp} ${bg}, text ${on ? `${onProp} ${on}` : `${text} by luminance`} (${TOKENS})`;
+    return { bg, name: text, tag: text, tagOpacity: 0.8, source };
+  }
+  return NEUTRAL;
 }
 
 // ---- OG card text layout -------------------------------------------------------
@@ -116,25 +182,26 @@ function layout(text, max, min, maxLines) {
 const esc = (s) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]);
 
-function ogCardSvg() {
-  // Neutral black-on-white card. It is an image, not site styling: name up to 2 lines,
-  // tagline up to 2, the whole block centred vertically.
+function ogCardSvg(c) {
+  // A text card in the brand colors, or neutral black-on-white. It is an image, not site
+  // styling: name up to 2 lines, tagline up to 2, the whole block centred vertically.
   const n = layout(name, 76, 48, 2);
   const t = layout(tagline, 36, 26, 2);
   const GAP = 24;
   const blockH = n.lines.length * n.size * 1.15 + (tagline ? GAP + t.lines.length * t.size * 1.3 : 0);
   let y = Math.round((630 - blockH) / 2);
-  const block = ({ lines, size }, weight, fill, lineHeight) =>
+  const block = ({ lines, size }, weight, fill, lineHeight, opacity = 1) =>
     lines
       .map((line) => {
         y += Math.round(size * lineHeight); // baseline of this line
-        return `<text x="${TEXT_X}" y="${y}" font-family="sans-serif" font-size="${size}" font-weight="${weight}" fill="${fill}">${esc(line)}</text>`;
+        const o = opacity === 1 ? '' : ` fill-opacity="${opacity}"`;
+        return `<text x="${TEXT_X}" y="${y}" font-family="sans-serif" font-size="${size}" font-weight="${weight}" fill="${esc(fill)}"${o}>${esc(line)}</text>`;
       })
       .join('');
-  const nameSvg = block(n, 700, '#111111', 1.15);
+  const nameSvg = block(n, 700, c.name, 1.15);
   y += GAP;
-  const tagSvg = tagline ? block(t, 400, '#555555', 1.3) : '';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630"><rect width="1200" height="630" fill="#ffffff"/>${nameSvg}${tagSvg}</svg>`;
+  const tagSvg = tagline ? block(t, 400, c.tag, 1.3, c.tagOpacity) : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630"><rect width="1200" height="630" fill="${esc(c.bg)}"/>${nameSvg}${tagSvg}</svg>`;
 }
 
 // ---- Render ----------------------------------------------------------------------
@@ -175,8 +242,10 @@ try {
   write('public/apple-touch-icon.png', await png(180), '180x180');
 
   if (!noOg) {
-    const og = await sharp(Buffer.from(ogCardSvg())).webp({ quality: 90 }).toBuffer();
+    const colors = cardColors();
+    const og = await sharp(Buffer.from(ogCardSvg(colors))).webp({ quality: 90 }).toBuffer();
     write('public/og.webp', og, '1200x630');
+    console.log(`og card colors: ${colors.source}`);
   }
 } catch (err) {
   die(1, `error: could not render images: ${err.message}`);

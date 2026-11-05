@@ -25,7 +25,6 @@
       "Bash(npm run deploy)",
       "Bash(npm run deploy *)",
       "Bash(npx wrangler deploy)",
-      "Bash(npx wrangler deploy *)",
       "Bash(npx wrangler delete *)",
       "Bash(git push --force*)",
       "Bash(git push -f*)"

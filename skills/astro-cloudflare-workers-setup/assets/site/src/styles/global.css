@@ -1,4 +1,6 @@
-/* src/styles/global.css — site styles. Add your design here. */
+@import './tokens.css';
+
+/* global.css — site-wide styles. tokens.css is generated from DESIGN.md by `npm run design`; never edit it by hand. */
 
 *,
 *::before,

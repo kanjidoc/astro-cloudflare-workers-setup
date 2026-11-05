@@ -13,7 +13,7 @@ Turns a **live site built by `astro-cloudflare-workers-setup`** into a private o
 
 **Design in one paragraph.** `wrangler.jsonc` `main` becomes a custom Worker entry `src/worker.ts`, run before every request. It redirects the `*.workers.dev` host to the apex, serves a small exact public allowlist, routes `/auth/*` and `/invite/*` to on-demand Astro endpoints, and requires a KV-backed session for everything else. Without one, a document request gets the prerendered lock page **at the requested URL** (200, `no-store`); anything else gets 401. Sessions: random token in a `__Host-` cookie, SHA-256 in KV, fixed 24 h. First passkey per person via a single-use invite link from `npm run invite`. The Worker sets every security header itself, including `X-Robots-Tag: noindex, nofollow`: a private site is never indexed, but link previews still work because the lock page carries the OG tags. Full detail: `references/technical-design.md` (read it only for a deviation or a bug).
 
-**What ships unstyled.** The lock and invite pages carry only data hooks. Tell the user this is by design: "when you want the lock screen designed, ask me". The hooks (`data-auth-state` on `<html>`, the `auth:state` event, `data-arrival="unlock"`, `data-user`) are theirs to build on.
+**What ships unstyled.** The lock and invite pages carry only data hooks. Tell the user this is by design: "when you want the lock screen designed, ask me ('design my site': the `astro-cloudflare-design` skill styles them, keeping the hooks)". The hooks (`data-auth-state` on `<html>`, the `auth:state` event, `data-arrival="unlock"`, `data-user`) are theirs to build on.
 
 ## Preconditions — check, and stop with the reason if any fails
 
@@ -89,7 +89,7 @@ Then `npx prettier --write src --log-level warn` (not `wrangler.jsonc`: Prettier
 npm test && npm run verify
 ```
 
-Expect two `node --test` summaries, both `fail 0` (the unit suites, then the build guard's 5 tests after the build), `astro check` `0 errors`, then the dry run: `Configuration being used: "dist/server/wrangler.json"`, an `Attaching additional modules` table, and `Your Worker has access to the following bindings:` listing `AUTH_KV`, `AUTH_RATE_LIMIT`, `ASSETS` and the three vars. **`No bindings found.` means the gate was dropped**: see `references/pitfalls.md`, first row.
+Expect two `node --test` summaries, both `fail 0` (on 3.1+ sites, the generator's `tokens.css:` line first; then the unit suites, then the build guard's 5 tests after the build), `astro check` `0 errors`, then the dry run: `Configuration being used: "dist/server/wrangler.json"`, an `Attaching additional modules` table, and `Your Worker has access to the following bindings:` listing `AUTH_KV`, `AUTH_RATE_LIMIT`, `ASSETS` and the three vars. **`No bindings found.` means the gate was dropped**: see `references/pitfalls.md`, first row.
 
 ### Step 7 — Local gate check
 
