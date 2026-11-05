@@ -1,6 +1,6 @@
 # Passkey sign-in: technical design
 
-Read this only for a deviation from the shipped code or when debugging. The procedure is SKILL.md. Ported from the <site> private sign-in (its branch `feat/private-sign-in`, commit 62a9a67); `<apex>`, `<backup-host>` and `<user>` stand for the site's own values.
+Read this only for a deviation from the shipped code or when debugging. The procedure is SKILL.md. The shipped code under `assets/site/` is this skill's own; this document is its design record. `<apex>`, `<backup-host>` and `<user>` stand for the site's own values.
 
 This document covers how the feature works, not how anything looks. Where a site's own visual layer needs a hook, it names the hook (a data attribute or an event).
 
@@ -65,16 +65,20 @@ The build must keep at least one on-demand route. If every route is prerendered,
 | `src/worker.ts` | Worker entry: host redirect, allowlist, gate, lock page, security headers, the `data-user`/`data-arrival` rewrite, hand-off to Astro | `export default { fetch(request, env, ctx) } satisfies ExportedHandler<Env>` |
 | `src/lib/gate/allowlist.ts` | Pure check of whether a path is public | `isPublicPath(pathname: string): boolean` |
 | `src/lib/gate/classify.ts` | Decides whether an unauthenticated request should get the lock page | `wantsDocument(request: Request): boolean` |
+| `src/lib/gate/arrival.ts` | The one-time arrival signal (§6.3) | `arrivalAttributes(value)`, `arrivalDecision(request, cookieValue): { attributes, expire }` |
+| `src/lib/gate/redirect.ts` | The backup-host → apex redirect target, always on the apex host (a leading `//` can't escape) | `backupRedirectTarget(origin, pathname, search): string` |
 | `src/lib/gate/headers.ts` | Security headers and cache policy | `applySecurityHeaders(res, opts)`, `applyGatedCache(res, pathname)` |
+| `src/data/auth.ts` (from `auth.ts.template`) | The site's names and copy, validated at import time | `RP_NAME`, `SITE_ORIGIN`, `USERS`, `type User`, `isUser`, `authCopy`, `withName` |
 | `src/lib/auth/config.ts` | Constants and env reads | `USERS`, `type User` (from `src/data/auth.ts`), TTLs, `authConfig(env): { rpID, rpName, origin, cookieSecret, kv, limiter } \| null` |
 | `src/lib/auth/encoding.ts` | base64url, hex | `b64url.encode/decode`, `hex(buf)` |
-| `src/lib/auth/crypto.ts` | Random tokens, hashing, HMAC | `randomToken(bytes=32): string`, `sha256Hex(s): Promise<string>`, `hmacSign(key, data)`, `hmacVerify(key, data, sig): Promise<boolean>` (uses `crypto.subtle.verify`, which is constant-time) |
+| `src/lib/auth/crypto.ts` | Random tokens, hashing, HMAC | `randomToken(bytes=32): string`, `sha256Hex(s): Promise<string>`, `hmacSign(key, data)`, `hmacVerify(key, data, sig): Promise<boolean>` (uses `crypto.subtle.verify`, constant-time in practice; not stated in Cloudflare's docs) |
 | `src/lib/auth/cookies.ts` | Parse and serialise cookies | `readCookie(req, name)`, `sessionCookie(token)`, `clearSessionCookie()`, `challengeCookie(value)`, `clearChallengeCookie()` |
 | `src/lib/auth/challenge.ts` | Stateless signed challenge | `sealChallenge(secret, payload): Promise<string>`, `openChallenge(secret, cookie, now, purpose): Promise<ChallengePayload \| null>` |
 | `src/lib/auth/store.ts` | Typed KV access, the only module that touches `AUTH_KV` | `getSession/putSession/deleteSession`, `getCredential/putCredential`, `getInvite/deleteInvite`, `getUser` |
-| `src/lib/auth/session.ts` | Resolve and create sessions | `resolveSession(req, kv): Promise<{ user, keyHash, record } \| null>`, `createSession(env, user, credId, meta): Promise<string /*Set-Cookie*/>` |
+| `src/lib/auth/session.ts` | Resolve and create sessions | `resolveSession(req, kv): Promise<{ user, keyHash, record } \| null>`, `createSession(kv, user, credentialId, meta, now): Promise<string /*Set-Cookie*/>` |
 | `src/lib/auth/webauthn.ts` | Thin wrappers around SimpleWebAuthn with fixed settings (§5.1) | `authOptions(cfg)`, `verifyAuth(cfg, response, expectedChallenge, cred)`, `regOptions(cfg, user)`, `verifyReg(cfg, response, expectedChallenge)` |
 | `src/lib/auth/http.ts` | Shared endpoint guards | `requireSameOrigin(req, origin)`, `requireJson(req)`, `rateLimit(limiter, req, bucket)`, `json(body, status)` |
+| `src/lib/auth/handlers.ts` | The logic behind every `/auth/*` route and the invite page; the route files only call it | `sessionInfo`, `signinOptions`, `signinVerify`, `inviteLookup`, `inviteOptions`, `inviteVerify`, `signout` |
 | `src/pages/lock.astro` | Prerendered lock screen (`/lock/`). Unstyled; carries the hooks in §6. | Uses `Layout` with `noindex` (no canonical or `og:url`, since it's served under any URL) |
 | `src/pages/invite/[token].astro` | On-demand invite page (`prerender = false`) | Renders the invite or unavailable variant (§5.3) |
 | `src/pages/auth/signin/options.ts`, `.../signin/verify.ts` | Sign-in endpoints | §5.2 |
@@ -83,12 +87,15 @@ The build must keep at least one on-demand route. If every route is prerendered,
 | `src/pages/auth/session.ts` | Who am I, used after a bfcache restore | `GET` → `200 {user}` or `401` |
 | `src/scripts/auth-flow.ts` | Client state machine shared by lock and invite (§6.1) | `createAuthFlow({ kind, startCeremony, fetchOptions, verify, readyForSuccess? })` |
 | `src/scripts/arrival.ts` | Bundled module on gated pages: the bfcache session check (§6.5) | none |
+| `src/scripts/hooks.ts` | The registry the visual layer and the auth scripts share (§6) | `setAuthState`, `setReadyForSuccess`/`readyForSuccess`, `setReadyToLeave`/`readyToLeave` |
 | `src/scripts/signout.ts` | Sign-out mechanics (8 s timeout on the POST, navigate only on 204): sets `data-auth-state="signing-out"`, waits for the visual layer's optional `readyToLeave()` promise (default: resolves immediately), then POSTs and navigates (§5.4) | none |
 | `scripts/auth/kv.mjs` | Wrapper around `npx wrangler kv key …` (`--remote` by default, `--local` for tests) | `put/get/list/del` |
 | `scripts/auth/invite.mjs` | `npm run invite -- <name>` | §8.1 |
 | `scripts/auth/list.mjs` | `npm run auth:list` | §8.1 |
 | `scripts/auth/revoke.mjs` | `npm run auth:revoke -- …` | §8.1 |
 | `tests/unit/*.test.ts` | `node:test` unit tests for pure helpers | §10.1 |
+| `tests/unit/helpers/fake-kv.ts` | In-memory `KVLike` for the unit suites | `FakeKV` |
+| `tests/build-guard.test.ts` | Runs at the end of `npm run build`: fails it if `main` was dropped (F5) or a user name reached a public file | 5 tests |
 | `.dev.vars.example` | Committed template, no real secret | §8.3 |
 
 ### 3.2 Changed files
@@ -97,13 +104,13 @@ The build must keep at least one on-demand route. If every route is prerendered,
 | :-- | :-- |
 | `wrangler.jsonc` | `main: "./src/worker.ts"`, `assets.run_worker_first: true`, `kv_namespaces`, `ratelimits`, `vars`, and a `previews` block (§8.2). Then run `npm run generate-types`. |
 | `worker-configuration.d.ts` | Regenerated: `AUTH_KV: KVNamespace`, `AUTH_RATE_LIMIT: RateLimit`, the vars, and `AUTH_COOKIE_SECRET` |
-| `package.json` | Deps `@simplewebauthn/server@^14`, `@simplewebauthn/browser@^14`. Scripts `test`, `invite`, `auth:list`, `auth:revoke`. |
+| `package.json` | Deps `@simplewebauthn/server@^14`, `@simplewebauthn/browser@^14`. `build` gains `&& node --test tests/build-guard.test.ts`. New scripts `test` (`node --test 'tests/unit/*.test.ts'`), `invite`, `auth:list`, `auth:revoke`. |
 | `.gitignore` | Add `.dev.vars*` and `!.dev.vars.example` (today only `.env*` is covered) |
 | `src/layouts/Layout.astro` | Gets a `chrome` prop; on gated pages (`chrome === 'page'`) it includes `arrival.ts` and `signout.ts`. A sign-out control is any `<button data-auth-action="signout">`. |
 | `public/_headers` | No rule changes. Its comment gains a note that the Worker is now authoritative (§7.4). |
 | `CLAUDE.md`, `CHANGELOG.md` | The skill's Step 12 |
 
-`astro.config.mjs` doesn't change: `output: 'static'`, `session: false` and `imageService: 'compile'` all stay. Setting `prerender = false` on the few routes above is enough (Astro's default "hybrid" behaviour).
+`astro.config.mjs` doesn't change: `output: 'static'`, `session: false` and `imageService: 'compile'` all stay. Setting `prerender = false` on the few routes above is enough: with `output: 'static'`, a route opts into on-demand rendering with `export const prerender = false`.
 
 ---
 
@@ -137,18 +144,18 @@ Every value is JSON. The same summary is also stored as KV **metadata** (≤1 Ki
 | `rpName` | `RP_NAME` from `src/data/auth.ts` | Shown by the OS or password-manager prompt |
 | Registration `authenticatorSelection` | `{ residentKey: 'required', userVerification: 'required' }` | Discoverable credential, so the lock screen needs no username. UV at every ceremony (§5.1 decision). |
 | `attestationType` | `'none'` | No attestation policy is needed for two people |
-| `supportedAlgorithmIDs` | `[-8 (Ed25519), -7 (ES256), -257 (RS256)]`, passed to both generate and verify | Deterministic. v14 otherwise prefers ML-DSA when it detects runtime support (F7). |
+| `supportedAlgorithmIDs` | `[-8 (Ed25519), -7 (ES256), -257 (RS256)]`, passed to `generateRegistrationOptions` and `verifyRegistrationResponse` (sign-in verification has no such option; the stored key fixes the algorithm) | Deterministic. v14 otherwise puts ML-DSA-44 first when the runtime supports it (F7). |
 | `excludeCredentials` | not used | A duplicate passkey is harmless and revocable. Avoids a confusing "already registered" failure. |
 | Authentication | `allowCredentials: []` (discoverable), `userVerification: 'required'`, `timeout: 120000` | Button-only lock screen. No conditional UI or autofill (there's no input field). |
 | `requireUserVerification` on verify | `true` (the library default). No fallback if an authenticator skips UV. | §5.1 decision |
 | Counter | Persist `newCounter`. SimpleWebAuthn rejects a counter that doesn't increase once either side is non-zero. Synced passkeys (iCloud Keychain, Proton Pass, 1Password) usually report 0 every time, which passes. | F8 |
-| Session cookie | `__Host-auth-session=<token>; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=86400` | `__Host-` pins it to the exact host with no `Domain` attribute |
+| Session cookie | `__Host-auth-session=<token>; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=86400` | `__Host-` pins it to the exact host with no `Domain` attribute. (`__Host-Http-`, which also enforces `HttpOnly`, would be an optional hardening for all three cookies; not adopted.) |
 | Challenge cookie | `__Host-auth-challenge=<b64url(payload)>.<b64url(HMAC-SHA256)>; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=300` | Payload `{ c: challenge, p: 'auth'\|'reg', i?: inviteHash, u?: user, exp }`. Cleared on every verify attempt. |
 | Secret | `AUTH_COOKIE_SECRET` (Worker secret, ≥32 random bytes) | The only secret. It signs challenge cookies. |
 
 ### 5.2 Sign-in (lock screen)
 
-| UI state (contract) | Client action | HTTP | Server |
+| UI state | Client action | HTTP | Server |
 | :-- | :-- | :-- | :-- |
 | `idle` (page load) | Prefetch options (§6.1) | `POST /auth/signin/options` `{}` | Same-origin check, rate limit, `generateAuthenticationOptions`, `Set-Cookie: __Host-auth-challenge` → `200 { options }` |
 | `idle` → `prompting` | Tap on unlock. `startAuthentication({ optionsJSON })` | — | — |
@@ -164,7 +171,7 @@ After `success`: navigate with `location.replace(sameURL)` (§6.2). The verify r
 
 1. the owner runs `npm run invite -- <user>` and sends the printed `https://<apex>/invite/<token>` over a private channel.
 2. `GET /invite/<token>` is on-demand. It looks up `invite:<sha256(token)>`:
-   - **Found and unexpired:** status `200`. Renders the invite variant with `name` for the contract's "hi {name}".
+   - **Found and unexpired:** status `200`. Renders the invite variant with `name` for the `authCopy.inviteHeading` string.
    - **Missing, used or expired:** status `410`. Renders the unavailable variant. All three cases get the same response (no enumeration).
    - Headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`.
    - **GET never consumes the invite.** Link-preview bots that unfurl the link in a chat are harmless.
@@ -183,7 +190,7 @@ After `success`: navigate with `location.replace(sameURL)` (§6.2). The verify r
 
 `POST /auth/signout` (same-origin JSON) → the server deletes `session:<hash>` and responds `204` with:
 - `Set-Cookie: __Host-auth-session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`
-- no `Clear-Site-Data`: browsers hold that response until the cache is wiped, which left the page blank after sign-out. Gated responses are `private, no-store`, so nothing private is cached anyway.
+- no `Clear-Site-Data`: in testing, browsers held that response until the cache was wiped, which left the page blank after sign-out (observed, not documented). Gated responses are `private, no-store`, so nothing private is cached anyway.
 
 Before the POST, `signout.ts` sets `data-auth-state="signing-out"` and awaits the visual layer's optional `readyToLeave()` (for the fade). After the `204`, the client calls `location.replace('/')`. The Worker serves the lock page at `/` because the cookie is gone. Only the current session is revoked. Other devices stay signed in.
 
@@ -199,14 +206,14 @@ Before the POST, `signout.ts` sets `data-auth-state="signing-out"` and awaits th
 
 ### 6.1 State machine wiring (`src/scripts/auth-flow.ts`)
 
-- **States:** `idle | prompting | verifying | success | failure`, exactly as in the contract.
+- **States:** `idle | prompting | verifying | success | failure`, as in the UI states in §5.2.
 - **Hooks for the visual layer:**
   - `document.documentElement.dataset.authState = state`
   - `document.dispatchEvent(new CustomEvent('auth:state', { detail: { from, to } }))`
 - **Button:** a real `<button>`. Taps are ignored unless the state is `idle` or `failure`.
-- **Options prefetch:** options are fetched on load and on `pageshow`. They count as stale after 4 minutes (the challenge cookie lives 5), and a `visibilitychange` back to visible refetches them if stale. With fresh options, the tap calls `startAuthentication` / `startRegistration` synchronously inside the click handler, so Safari's user-activation requirement is met. If they're stale, the tap fetches first (still usually within activation).
+- **Options prefetch:** options are fetched on load and on `pageshow`. They count as stale after 4 minutes (the challenge cookie lives 5), and every `visibilitychange` back to visible or window `focus` refetches them (another tab may have replaced the single challenge cookie). With fresh options, the tap calls `startAuthentication` / `startRegistration` synchronously inside the click handler, so Safari's user-activation requirement is met. If they're stale, the tap fetches first (still usually within activation).
 - **Error mapping** (from SimpleWebAuthn's `WebAuthnError.code` or `cause.name`):
-  - `ERROR_CEREMONY_ABORTED`, `NotAllowedError` or `AbortError` → `idle`. Silent, as the contract requires. Cancel and timeout can't be told apart, and both are treated as a cancel.
+  - `ERROR_CEREMONY_ABORTED`, `NotAllowedError` or `AbortError` → `idle`. Silent, by design. Cancel and timeout can't be told apart, and both are treated as a cancel.
   - Any other ceremony error (e.g. `SecurityError`, `InvalidStateError`) → `failure`.
 - **`verifying` hold:** the machine stays in `verifying` until the server answers or a 20 s `AbortSignal.timeout` fires. **`readyForSuccess?: () => Promise<void>`** is an optional hook the visual layer can register (for example, to let an animation finish). `success` is entered only after both the `200` and this promise resolve. The default resolves immediately.
 - **`success`:** navigate (§6.2). No JS waits on animations; any entrance effect belongs to the destination page (§6.3).
@@ -215,7 +222,7 @@ Before the POST, `signout.ts` sets `data-auth-state="signing-out"` and awaits th
 ### 6.2 Navigation after success and "return to the page you asked for"
 
 - The lock page is **served at the requested URL** (no redirect), so returning is just reloading that URL with a session. There's **no `returnTo` parameter**, and so no open redirect.
-- The navigation is **`location.replace(url)`** where `url = location.pathname + location.search`. It's same-origin and script-initiated with `replace` history handling. The spec allows this navigation type (push or replace, as long as it isn't triggered from browser UI), and a local test in Chrome 153 confirmed that a cross-document view transition fires for it, even to the identical URL after an async fetch (F10). **Never `location.reload()`**: reloads are excluded from view transitions (verified).
+- The navigation is **`location.replace(url)`** where `url = location.pathname + location.search`. It's same-origin and script-initiated with `replace` history handling. The spec allows this navigation type (push or replace, as long as it isn't triggered from browser UI), and it was observed in testing that a cross-document view transition fires for it, even to the identical URL after an async fetch (F10). **Never `location.reload()`**: reloads are excluded from view transitions (verified).
 - **Fragment:** the navigation target is `pathname + search` without the `#hash` (navigating to the identical URL with a hash would only be a fragment jump). The fragment is dropped. For two people and no deep-linked anchors today, that's accepted (YAGNI).
 - **Invite:** `location.replace('/')`.
 - **Signed in and visiting `/lock/` directly:** `303` to `/`.
@@ -255,7 +262,7 @@ On every gated `text/html` response, the Worker's `HTMLRewriter` sets `<html dat
 | :-- | :-- |
 | `<apex>` | Gate as described |
 | `env.BACKUP_HOST` (`<backup-host>`) | `301` to `https://<apex>` with the same path and query, before anything else. Passkeys are bound to the apex and can't be used here. |
-| Anything else (Worker Preview hosts `*-<backup-host>`, `localhost` in tests) | Gated like the apex. On a preview host, sign-in fails by construction (the RP ID doesn't match), so previews only ever show the lock screen. |
+| Anything else (workers.dev Preview and Deployment hosts `<preview>-<name>.<subdomain>.workers.dev`, custom-domain Preview hosts, `localhost` in tests) | Gated like the apex. On a preview host, sign-in fails by construction (`ORIGIN` is the exact apex origin, and previews use their own KV), so previews only ever show the lock screen. |
 
 ### 7.2 Public allowlist (GET and HEAD only; everything else needs a session)
 
@@ -281,7 +288,7 @@ On every gated `text/html` response, the Worker's `HTMLRewriter` sets `<html dat
 ### 7.4 Headers
 
 - **Security headers on every Worker response:** `applySecurityHeaders` sets them with `headers.set`, so it's idempotent. `_headers` rules do apply to responses from `env.ASSETS.fetch()` (F2), but they don't apply to responses the Worker creates (redirects, 401s, JSON, HTMLRewriter output), so the Worker is authoritative:
-  - `X-Robots-Tag: noindex, nofollow` (stealth; on every response and every host)
+  - `X-Robots-Tag: noindex, nofollow` (stealth; on every response and every host — workers.dev Preview hosts additionally carry Cloudflare's own `noindex`)
   - `Strict-Transport-Security: max-age=31536000; includeSubDomains` (**never `preload`**)
   - `X-Content-Type-Options: nosniff`
   - `X-Frame-Options: DENY`
@@ -317,8 +324,8 @@ On every gated `text/html` response, the Worker's `HTMLRewriter` sets `<html dat
 ### 8.2 One-time setup (the owner's laptop)
 
 ```sh
-npx wrangler kv namespace create <name>-auth          # → id for wrangler.jsonc
-npx wrangler kv namespace create <name>-auth-preview  # → id for previews block
+npx wrangler kv namespace create <name>-auth --update-config=false          # → id for wrangler.jsonc
+npx wrangler kv namespace create <name>-auth-preview --update-config=false  # → id for previews block
 openssl rand -base64 32 | npx wrangler secret put AUTH_COOKIE_SECRET
 openssl rand -base64 32 | npx wrangler preview base-config secret put AUTH_COOKIE_SECRET
 npm run generate-types
@@ -340,10 +347,10 @@ The `wrangler.jsonc` additions:
 ```
 
 - **The `previews` block is required.** Worker Previews inherit no bindings or vars (F11). Previews get their own KV namespace, so preview code never touches production sessions.
-- If Wrangler rejects `ratelimits` inside `previews`, drop it there. The code treats a missing limiter as "no limit" and logs once (it's only a brake).
+- Wrangler 4.157 accepts `ratelimits` inside `previews`; if an older one rejects it, drop it there. The code treats a missing limiter as "no limit" and logs once (it's only a brake).
 - The namespace ids aren't secrets and can be committed (the repo is private).
 - **Don't use `secrets.required`.** When it's set, `.dev.vars` loads only the listed secrets, which would block the local `RP_ID`/`ORIGIN` overrides (F12). Instead the Worker **fails closed**: if `AUTH_COOKIE_SECRET` or `AUTH_KV` is missing, the auth endpoints return `503`, the gate still serves the lock page, and nothing gated is ever served.
-- **Rate limit keys** are `${cf-connecting-ip}:${bucket}`, with buckets `signin` and `invite`, plus `invite-get` on the invite page. Cloudflare's docs advise against IP keys for authenticated traffic, but these endpoints are unauthenticated, so IP is the only key available. Exceeding the limit returns `429`, which the UI treats as `failure`.
+- **Rate limit keys** are `${cf-connecting-ip}:${bucket}`, with buckets `signin` and `invite`, plus `invite-get` on the invite page. Cloudflare recommends against IP keys in general (shared IPs), but these endpoints are unauthenticated, so IP is the only key available. Exceeding the limit returns `429`, which the UI treats as `failure`.
 
 ### 8.3 Local development
 
@@ -385,7 +392,7 @@ AUTH_COOKIE_SECRET=replace-with-openssl-rand-base64-32
 | Open redirect via return URL | There's no return URL parameter. The lock page is served in place. The navigations go to `location.pathname + search` (same origin) or `/`. | None |
 | Account and resource enumeration | The lock page is served for every path. Sign-in errors are a uniform `401 {ok:false}`. Invite unavailable is uniform `410`. | None practical |
 | Assertion replay | The challenge is HMAC-bound, 5-minute expiry, cleared after each attempt. The origin check. The counter check (weak for synced passkeys). | The challenge isn't single-use server-side. Replay needs both a captured assertion and the HttpOnly Strict challenge cookie within 5 minutes. Accepted. |
-| Brute force and cost abuse | Rate Limiting binding per IP and bucket. Every endpoint rejects malformed input before any KV write. | Per-location and eventually consistent, so it's a brake, not a quota (F1). Free plan daily limits cap the damage. |
+| Brute force and cost abuse | Rate Limiting binding per IP and bucket. Every endpoint rejects malformed input before any KV write. | Per-location and eventually consistent, so it's a brake, not a quota (F1). Free plan daily limits cap the damage. Past the Workers Free daily limit, requests matched by `run_worker_first` get a 429 instead of falling back to static assets, so the gate fails closed (the route fail-open/closed toggle doesn't change that) (F3). |
 | Clickjacking | `X-Frame-Options: DENY` (CSP `frame-ancestors` can't be set via `<meta>`) | None |
 | Private assets | Everything outside the allowlist is gated. Images are never public. Gated responses are `private`. Gated responses are never cached (`private, no-store`; hashed assets `private`). | JS and CSS are public by extension, which is why the rule about private content in §7.2 exists |
 | bfcache or back-button exposure after sign-out | §6.5 | None practical |
@@ -411,24 +418,31 @@ AUTH_COOKIE_SECRET=replace-with-openssl-rand-base64-32
 
 ## 10. Testing
 
-### 10.1 Unit tests (`npm test` → `node --test tests/unit/`; the skill ships the pure-helper suites)
+### 10.1 Unit tests (`npm test` → `node --test 'tests/unit/*.test.ts'`; the skill ships the pure-helper suites)
 
-- Node 24 runs `.ts` natively (type stripping). Helpers use only erasable TypeScript and `.ts` import extensions (`allowImportingTsExtensions` is already on).
-- Web Crypto is global in Node 24. The helpers deliberately avoid the workerd-only `crypto.subtle.timingSafeEqual`: HMAC checks use `crypto.subtle.verify`, and token lookups are by hash, so there's no comparison.
+- Node 26 (and 22.18+) runs `.ts` natively (type stripping). The quoted glob matters: a bare directory argument to `node --test` needs Node ≥ 26.8. Helpers use only erasable TypeScript and `.ts` import extensions (`allowImportingTsExtensions` is already on).
+- Web Crypto is global in Node. The helpers deliberately avoid the workerd-only `crypto.subtle.timingSafeEqual`: HMAC checks use `crypto.subtle.verify`, and token lookups are by hash, so there's no comparison.
 
-| Module | Cases |
+14 suites, 69 tests:
+
+| Suite | Cases |
 | :-- | :-- |
-| `crypto`, `encoding` | Token length and entropy shape. The SHA-256 known vector. Base64url round-trip. |
-| `challenge` | Seal/open round-trip. A tampered payload or signature is rejected. Expired is rejected. A wrong purpose is rejected. |
-| `cookies` | Exact `Set-Cookie` strings. Parsing with duplicate names, spaces and other cookies present. |
-| `allowlist` | Every allowlisted path is public. `/_astro/x.png`, `.webp`, `.svg` and `.avif` are **gated**. Path traversal and encoded variants (`/_astro/..%2f`, `//og.webp`) are gated. |
-| `classify` | `Sec-Fetch-Dest` document or absent → lock. Image, script, empty → 401. |
-| `headers` | Every response class carries the security headers. The cache policy table from §7.4. |
-| `session` | Cookie `Max-Age` and KV TTL both equal `SESSION_TTL_S`. A stale cookie is cleared. The record and metadata shape. |
-| `arrival` | The Worker's rewrite adds `data-arrival` only when the arrival cookie is present, and always expires it. |
-| `auth-flow` | With a fake ceremony: cancel → idle (no message), other errors → failure, 401/429/503/network/timeout → failure, 200 → success only after `readyForSuccess`. Taps ignored while `prompting` or `verifying`. Options refetched when stale. `pageshow` with `persisted` resets to idle. |
+| `allowlist` (2) | Every allowlisted path is public. Everything else is gated, including `/_astro/` images and traversal or encoded variants (`/_astro/..%2f`, `//og.webp`). |
+| `arrival` (7) | `data-arrival` (and `data-arrival-from="invite"`) only with a valid arrival cookie. Only a GET document request consumes and expires it; HEAD and non-document requests never do. |
+| `auth-data` (3) | `USERS` shape (lowercase `[a-z0-9-]`, 1–32 chars, at least one), `isUser`, every copy string filled. |
+| `auth-flow` (15) | With a fake ceremony: happy path; the ceremony starts synchronously inside the tap; double taps start one ceremony; taps ignored while verifying; `verifying` holds until the server answers; `success` waits for `readyForSuccess`; cancel → idle, silently; other errors and 401/429/503/network/timeout → failure; options used once, refetched when stale and on visibility or focus; `pageshow` with `persisted` resets; a `410` reloads. |
+| `auth-scripts` (9) | Target flags; namespace args (the preview id read from JSONC); `kv.get` null only on a genuine local or remote not-found; invite and revoke args; `pickOne`; `keysToDelete`; the listing never shows a full key. |
+| `challenge` (3) | Seal/open round-trip. A tampered payload or signature is rejected. Expired and wrong-purpose are rejected. |
+| `classify` (2) | `Sec-Fetch-Dest` document or absent → lock. Image, script, fetch → 401. |
+| `config` (4) | Lifetimes match the decisions. `authConfig` returns validated settings, accepts the local ones, and fails closed on anything missing or malformed. |
+| `cookies` (2) | Exact `Set-Cookie` strings. Parsing with duplicate names, spaces and other cookies present. |
+| `encoding-crypto` (6) | Base64url round-trip and alphabet check, hex, token length, the SHA-256 known vector, HMAC verify rejects tampering. |
+| `headers` (4) | Every response class carries the security headers. `no-referrer` on the invite page. The cache policy table from §7.4. |
+| `http` (4) | Body size limits: by `Content-Length` before reading, and by actual bytes without one. |
+| `redirect` (3) | The backup-host target keeps path and query, and a leading `//` or `/\` never leaves the apex host. |
+| `signout-flow` (5) | Navigates only on `204` after `signing-out`; any other outcome resets to idle; waits for `readyToLeave`. |
 
-### 10.2 End-to-end (not shipped by the skill; the upstream suite, kept for reference)
+### 10.2 End-to-end tests (not shipped; kept as a reference for a site that adds Playwright)
 
 - **Chromium with the CDP virtual authenticator:** `WebAuthn.enable`, then `WebAuthn.addVirtualAuthenticator({ protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true })`.
   1. Seed a local invite (`npm run invite -- <user> --local`). Open `/invite/<token>`, save the passkey, land on `/` with `data-user="<user>"`. Opening the invite again shows the unavailable variant with `410`.
@@ -456,32 +470,31 @@ AUTH_COOKIE_SECRET=replace-with-openssl-rand-base64-32
 ## 11. Rollout
 
 1. **Prep (laptop):** do §8.2. Nothing is live yet. Existing visitors see no change.
-2. **Branch:** push `feat/private-sign-in`. The Worker Preview build shows the lock screen on the preview URL (useful for visual review). Unlocking there is impossible by design.
+2. **Branch:** push `feat/passkey-login`. The Worker Preview build shows the lock screen on the preview URL (useful for visual review). Unlocking there is impossible by design.
 3. **Merge to `main`.** Workers Builds deploys. Wait for the production (`main`) check run, not the first green run (the first green run may be the branch preview). From then on, **everyone without a session sees the lock page** at every URL, link previews keep working.
 4. **Enrol:** `npm run invite -- <user>`, then register. Repeat per person, sending each link over a private channel. Check with `npm run auth:list`.
 5. **Rollback:** `npx wrangler rollback` (token auth) or `git revert` and push. Rolling back to a pre-gate version makes the site public again. That's safe only while no private content exists. **Once private content ships, never roll back past the gate**: fix forward, or roll back to a gated version.
 
 ---
 
-
-## 13. Verified facts (researched 2026-09-28)
+## 12. Verified facts (researched 2026-09-28, re-checked 2026-11-05)
 
 | # | Fact | Source |
 | :-- | :-- | :-- |
-| F1 | The Workers Rate Limiting binding is GA (2025-09-19) and available on Workers Free. Config: `ratelimits[{ name, namespace_id, simple: { limit, period } }]`, where `period` must be **10 or 60** s. API: `await env.X.limit({ key })` → `{ success }`. Counters are per Cloudflare location and "permissive, eventually consistent… not an accurate accounting system". Docs discourage IP keys for authenticated traffic. **No change to the assumption** (the free-plan availability comes from the GA changelog and community reports; the binding page itself doesn't mention plans). | developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/ · developers.cloudflare.com/changelog/post/2025-09-19-ratelimit-workers-ga/ · github.com/sunwjy/furea/issues/16 |
+| F1 | The Workers Rate Limiting binding is GA (2025-09-19) and available on Workers Free. Config: `ratelimits[{ name, namespace_id, simple: { limit, period } }]`, where `period` must be **10 or 60** s. API: `await env.X.limit({ key })` → `{ success }`. Limits are "approximate and apply separately in each Cloudflare location"; "Counts are eventually consistent". The docs recommend against IP keys in general (many users can share one). **No change to the assumption** (the free-plan availability comes from the GA changelog and community reports; the binding page itself doesn't mention plans). | developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/ · developers.cloudflare.com/changelog/post/2025-09-19-ratelimit-workers-ga/ · github.com/sunwjy/furea/issues/16 |
 | F2 | `_headers` rules **are** applied to responses served through `env.ASSETS.fetch()`: the asset-worker's `handleRequest` ends with `attachCustomHeaders(...)`. They are **not** applied to responses the Worker creates itself. So the Worker must set headers on its own redirects, 401s, JSON and HTMLRewriter output, and it sets them on everything to be safe. | developers.cloudflare.com/workers/static-assets/headers/ ("not applied to responses generated by your Worker code") · github.com/cloudflare/workers-sdk/blob/main/packages/workers-shared/asset-worker/src/handler.ts |
-| F3 | `run_worker_first: true` runs the Worker before every asset request (a boolean, or up to 100 route patterns with `!` negation). Invoking the Worker makes those requests billable against Workers Free's **100,000/day** (only requests that don't invoke the Worker are free). That's fine for two people. | developers.cloudflare.com/workers/static-assets/binding/ · developers.cloudflare.com/workers/platform/limits/ · developers.cloudflare.com/workers/platform/pricing/ |
-| F4 | Astro middleware runs at **build time** for prerendered pages, and at request time only for on-demand routes. So the gate must be in the Worker entry. In adapter v13+ the custom entry is set with `main` in `wrangler.jsonc` and calls `handle(request, env, ctx)` from `@astrojs/cloudflare/handler`. Headers in `_headers` aren't applied to Worker-generated responses. | docs.astro.build/en/guides/middleware/ · docs.astro.build/en/guides/integrations-guide/cloudflare/#changed-custom-entrypoint-api |
-| F5 | **Changed an assumption.** In the installed adapter (14.3.3), `assetsOnly: () => _buildOutput === "static"`. When no route is on-demand, the Cloudflare Vite plugin writes the output config with `main: void 0`, making the deployment assets-only, so a custom `main` would be silently dropped. At least one `prerender = false` route is required (here, `/auth/*` and `/invite/[token]`). Today's build output (`dist/client/wrangler.json`) indeed has no `main`. | `node_modules/@astrojs/cloudflare/dist/index.js:186` · `node_modules/@cloudflare/vite-plugin/dist/index.mjs:~80037` |
-| F6 | workerd has Web Crypto (`getRandomValues`, SHA-256 `digest`, HMAC `sign`/`verify`, Ed25519, ECDSA, RSASSA) and the non-standard `crypto.subtle.timingSafeEqual`. With `compatibility_date` ≥ 2026-08-04, `nodejs_compat` is on by default (ours is 2026-09-27). The design avoids `timingSafeEqual` so the helpers stay testable in Node. PBKDF2 isn't needed (no passwords). | developers.cloudflare.com/workers/best-practices/workers-best-practices/ · developers.cloudflare.com/workers/runtime-apis/nodejs/crypto/ |
-| F7 | **Changed an assumption.** SimpleWebAuthn is at **v14** (server 14.0.3, 2026-09-25; browser 14.0.0), not v13. It supports "Cloudflare Workers, Bun, etc." and uses `globalThis.crypto` (no Node imports in the server package). v14 adds post-quantum ML-DSA and, when it detects runtime support, prefers ML-DSA-44 in `generateRegistrationOptions`. Hence the pinned `supportedAlgorithmIDs`. The default `authenticatorSelection` is `{ residentKey: 'preferred', userVerification: 'preferred' }` (we set both to `required`). `verifyRegistrationResponse` and `verifyAuthenticationResponse` default `requireUserVerification: true`. `startAuthentication({ optionsJSON, useBrowserAutofill? })`. Errors come as `WebAuthnError` with `.code` (e.g. `ERROR_CEREMONY_ABORTED`) and `.cause`. | npm registry (`npm view`) · github.com/MasterKale/SimpleWebAuthn CHANGELOG · Context7 `/masterkale/simplewebauthn` (`_autodocs/api-reference/*.md`) · local inspection of `@simplewebauthn/server@14.0.3` |
+| F3 | `run_worker_first: true` runs the Worker before every asset request (a boolean, or up to 100 route patterns with `!` negation). Invoking the Worker makes those requests billable against Workers Free's **100,000/day** (only requests that don't invoke the Worker are free). That's fine for two people. Past the Workers Free daily limit, requests matched by `run_worker_first` get a 429 instead of falling back to static assets, so the gate fails closed (the route fail-open/closed toggle doesn't change that). | developers.cloudflare.com/workers/static-assets/binding/ · `https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/` (updated 2026-11-03) · developers.cloudflare.com/workers/platform/limits/ · developers.cloudflare.com/workers/platform/pricing/ |
+| F4 | Astro middleware runs at **build time** for prerendered pages, and at request time only for on-demand routes. So the gate must be in the Worker entry. In adapter v13+ the custom entry is set with `main` in `wrangler.jsonc` and calls `handle(request, env, ctx)` from `@astrojs/cloudflare/handler`. `Astro.locals.runtime` was removed in adapter 13; bindings come from `import { env } from 'cloudflare:workers'`. Headers in `_headers` aren't applied to Worker-generated responses. | docs.astro.build/en/guides/middleware/ · docs.astro.build/en/guides/integrations-guide/cloudflare/#changed-custom-entrypoint-api |
+| F5 | **Changed an assumption.** In the installed adapter (14.3.3; unchanged in 14.4.4), `assetsOnly: () => _buildOutput === "static"`. When no route is on-demand, the Cloudflare Vite plugin writes the output config with `main: void 0`, making the deployment assets-only, so a custom `main` would be silently dropped. At least one `prerender = false` route is required (here, `/auth/*` and `/invite/[token]`). Today's build output (`dist/client/wrangler.json`) indeed has no `main`. | `node_modules/@astrojs/cloudflare/dist/index.js:186` (14.3.3) / `:169` (14.4.4) · `node_modules/@cloudflare/vite-plugin/dist/index.mjs:~80037` |
+| F6 | workerd has Web Crypto (`getRandomValues`, SHA-256 `digest`, HMAC `sign`/`verify`, Ed25519, ECDSA, RSASSA) and the non-standard `crypto.subtle.timingSafeEqual`. With `compatibility_date` ≥ 2026-08-04, `nodejs_compat` is on by default (the setup skill writes a current date). ML-DSA-44/65/87 and `SubtleCrypto.supports()` exist only behind the opt-in `webcrypto_modern_algorithms` flag (2026-10-01). The design avoids `timingSafeEqual` so the helpers stay testable in Node. PBKDF2 isn't needed (no passwords). | developers.cloudflare.com/workers/best-practices/workers-best-practices/ · developers.cloudflare.com/workers/runtime-apis/nodejs/crypto/ |
+| F7 | **Changed an assumption.** SimpleWebAuthn is at **v14** (server 14.0.3, 2026-09-25; browser 14.0.0), not v13. Its docs list Node LTS 22+ and Deno 2.4+; the server package uses `globalThis.crypto` with no `node:` imports, so it runs in workerd. v14 adds post-quantum ML-DSA (COSE ids ML-DSA-44 -48, ML-DSA-65 -49, ML-DSA-87 -50) and puts ML-DSA-44 first in `generateRegistrationOptions` whenever `SubtleCrypto.supports('verify', 'ML-DSA-44')` is true: Node 26 always, workerd only with `webcrypto_modern_algorithms`. Hence the pinned `supportedAlgorithmIDs`. The default `authenticatorSelection` is `{ residentKey: 'preferred', userVerification: 'preferred' }` (we set both to `required`). `verifyRegistrationResponse` and `verifyAuthenticationResponse` default `requireUserVerification: true`. `startAuthentication({ optionsJSON, useBrowserAutofill?, verifyBrowserAutofillInput? })`, `startRegistration({ optionsJSON, useAutoRegister? })`. Errors come as `WebAuthnError` with `.code` (e.g. `ERROR_CEREMONY_ABORTED`) and `.cause`. | npm registry (`npm view`) · github.com/MasterKale/SimpleWebAuthn CHANGELOG · Context7 `/masterkale/simplewebauthn` (`_autodocs/api-reference/*.md`) · local inspection of `@simplewebauthn/server@14.0.3` |
 | F8 | Counters: SimpleWebAuthn throws when the response counter is ≤ the stored one and either is non-zero. The docs note that some authenticators "always return 0", especially multi-device credentials, where cloning can't be detected. Keep storing `newCounter`. | simplewebauthn.dev/docs/packages/server · Context7 authentication.md |
 | F9 | **Changed an assumption**, and led to the single-path decision in §6.3. Cross-document view transitions (`@view-transition { navigation: auto; }`): Chrome/Edge 126+, Safari 18.2+ (iOS mirrors). **Firefox: not supported** (`version_added: false`, bug 1860854; current stable is about 156, dev edition 157). `PageRevealEvent`: Chrome 123+, Safari 18.2+, Firefox no. Same-document view transitions are in Firefox 144+. So the fallback can use `document.startViewTransition` there, and must not depend on `pagereveal`. | github.com/mdn/browser-compat-data (`css/at-rules/view-transition.json`, `api/PageRevealEvent.json`) · caniuse.com/cross-document-view-transitions · product-details.mozilla.org/1.0/firefox_versions.json |
-| F10 | Which navigations trigger it (normative, CSS View Transitions 2 `navigation` descriptor): same-origin, no cross-origin redirects, and `NavigationType` traverse, or push/replace "with user navigation involvement not equal to 'browser UI'". Reloads are excluded. **Checked locally in Chrome 153:** after a click, a 1.5 s delay and a `fetch`, `location.replace(sameURL)`, `location.assign(sameURL)` (which becomes `replace`) and `location.replace(otherURL)` all produced `pagereveal.viewTransition` ≠ null with `navigationType: replace`. `location.reload()` produced none. So script-initiated navigation after async work does fire it (some blog posts claim otherwise). There's also a 4 s navigation-to-render timeout, after which the transition is skipped. | drafts.csswg.org/css-view-transitions-2/#view-transition-navigation-descriptor · local Playwright test (scratchpad) · css-tricks.com/cross-document-view-transitions-part-1/ |
-| F11 | **Changed an assumption.** Worker Previews "do not inherit production settings". `vars` and storage bindings (KV) must be redefined in a `previews` block, which is required but may be empty. Preview secrets are set with `npx wrangler preview base-config secret put NAME`. Preview URLs are public by default. Without this block the gated Worker would crash or fail open on previews, so the design adds the block and fails closed. | developers.cloudflare.com/workers/previews/ · developers.cloudflare.com/workers/previews/configuration/ |
+| F10 | Which navigations trigger it (normative, CSS View Transitions 2 `navigation` descriptor): same-origin, no cross-origin redirects, and `NavigationType` traverse, or push/replace "with user navigation involvement not equal to 'browser UI'". Reloads are excluded. **Observed in testing:** after a click, a 1.5 s delay and a `fetch`, `location.replace(sameURL)`, `location.assign(sameURL)` (which becomes `replace`) and `location.replace(otherURL)` all produced `pagereveal.viewTransition` ≠ null with `navigationType: replace`. `location.reload()` produced none. So script-initiated navigation after async work does fire it (some blog posts claim otherwise). There's also a 4 s navigation-to-render timeout, after which the transition is skipped. | drafts.csswg.org/css-view-transitions-2/#view-transition-navigation-descriptor · css-tricks.com/cross-document-view-transitions-part-1/ |
+| F11 | **Changed an assumption.** Worker Previews "do not inherit production settings". `vars` and storage bindings (KV) must be redefined in a `previews` block, which is required but may be empty. Preview secrets are set with `npx wrangler preview base-config secret put NAME`; they are copied when a Preview is created, so an existing Preview needs `npx wrangler preview secret put NAME --name <preview>`. Preview URLs are public by default. Previews can also run on custom-domain hosts, which get no automatic noindex (the Worker's own header applies). Without this block the gated Worker would crash or fail open on previews, so the design adds the block and fails closed. | developers.cloudflare.com/workers/previews/ · developers.cloudflare.com/workers/previews/configuration/ |
 | F12 | When `secrets.required` is set, `wrangler dev` and the Vite plugin load **only** the listed keys from `.dev.vars`, and deploy fails if they're missing. This conflicts with local `RP_ID`/`ORIGIN` overrides, so it isn't used (§8.2). | developers.cloudflare.com/workers/wrangler/configuration/#secrets-configuration-property |
 | F13 | Workers Free: 10 ms CPU per invocation, 100,000 requests/day, 128 MB memory, 1 s startup. KV free tier: 100,000 reads, 1,000 writes, 1,000 deletes and 1,000 lists per day (reset 00:00 UTC), 1 GB storage. | developers.cloudflare.com/workers/platform/limits/ · developers.cloudflare.com/workers/platform/pricing/ |
 | F14 | KV consistency: writes are immediately visible in the same location and take up to 60 s (or the `cacheTtl`, minimum now 30 s) elsewhere. Negative lookups are cached too. `expirationTtl` must be ≥ 60 s. Concurrent writes are last-write-wins, with at most one write per second per key. That's acceptable here: sessions are created and first read in the same location, revocation within 60 s is fine for two people, and challenges were kept out of KV for this reason. | developers.cloudflare.com/kv/api/write-key-value-pairs/ · developers.cloudflare.com/kv/api/read-key-value-pairs/ · developers.cloudflare.com/changelog/post/2026-01-30-kv-reduced-minimum-cachettl/ |
-| F15 | Wrangler 4.141: `wrangler kv key put <key> [value] --binding --ttl --metadata --local\|--remote` (local is the default, so the scripts pass `--remote`). | `npx wrangler kv key put --help` (local) |
+| F15 | Wrangler 4.141 and 4.157: `wrangler kv key put <key> [value] --binding --ttl --metadata --local\|--remote` (local is the default, so the scripts pass `--remote`). | `npx wrangler kv key put --help` (local) |
 | F16 | The current build's CSP `<meta>` already has `script-src 'self' 'sha256-…'`. Astro-processed script modules are hashed automatically. (Astro also offers `Astro.csp.insertScriptHash()`, not needed after the §6.3 decision.) | `dist/client/index.html` · docs.astro.build/en/reference/api-reference/#cspinsertscripthash |
 

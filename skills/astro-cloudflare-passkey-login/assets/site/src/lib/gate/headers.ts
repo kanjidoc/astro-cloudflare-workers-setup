@@ -1,4 +1,4 @@
-// Security headers and cache policy (technical spec §7.4). The Worker is authoritative:
+// Security headers and cache policy (technical design §7.4). The Worker is authoritative:
 // _headers rules don't reach responses the Worker creates (redirects, 401s, JSON, rewritten HTML).
 // Stealth: X-Robots-Tag goes on every response. Never add HSTS preload.
 

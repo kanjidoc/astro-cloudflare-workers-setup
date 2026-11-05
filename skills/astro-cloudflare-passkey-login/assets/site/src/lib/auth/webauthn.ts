@@ -1,4 +1,4 @@
-// Thin wrappers around SimpleWebAuthn v14 with the fixed settings from technical spec §5.1.
+// Thin wrappers around SimpleWebAuthn v14 with the fixed settings from technical design §5.1.
 // Signatures checked against @simplewebauthn/server@14.0.3's esm/*.d.ts.
 import {
   generateAuthenticationOptions,

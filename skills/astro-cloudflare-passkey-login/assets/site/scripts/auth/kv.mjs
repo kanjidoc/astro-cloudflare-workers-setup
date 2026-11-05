@@ -1,10 +1,9 @@
-// Wrapper around `npx wrangler kv key …` for the AUTH_KV namespace (technical spec §8.1).
+// Wrapper around `npx wrangler kv key …` for the AUTH_KV namespace (technical design §8.1).
 // Auth: $CLOUDFLARE_API_TOKEN from the environment. Never `wrangler login`.
 // Targets: --remote (default, production), --local (.wrangler/state, for tests),
 // --preview (the Worker Previews namespace from wrangler.jsonc → previews.kv_namespaces).
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import ts from 'typescript';
 
 /** @typedef {'remote' | 'local' | 'preview'} Target */
 /** @typedef {{ name: string, expiration?: number, metadata?: Record<string, unknown> }} KeyInfo */
@@ -27,16 +26,71 @@ export function parseTarget(argv) {
 }
 
 /**
- * The preview namespace id, read from wrangler.jsonc (JSONC parsed by TypeScript's parser).
+ * Index just past the string literal that opens at `start` (a `"`), honouring backslash escapes.
+ * @param {string} text
+ * @param {number} start
+ * @returns {number}
+ */
+function stringEnd(text, start) {
+  let i = start + 1;
+  while (i < text.length && text[i] !== '"') i += text[i] === '\\' ? 2 : 1;
+  return i + 1;
+}
+
+const TRAILING_COMMA = /\s*[}\]]/y;
+
+/**
+ * Parses JSONC (wrangler.jsonc) without dependencies: drops `//` and block comments outside
+ * string literals, then commas right before `}` or `]`, then `JSON.parse`.
+ * @param {string} text
+ * @returns {any}
+ */
+export function parseJsonc(text) {
+  text = text.replace(/^\uFEFF/, '');
+  let bare = '';
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '"') {
+      const end = stringEnd(text, i);
+      bare += text.slice(i, end);
+      i = end - 1;
+    } else if (text.startsWith('//', i)) {
+      const nl = text.indexOf('\n', i);
+      i = (nl === -1 ? text.length : nl) - 1;
+    } else if (text.startsWith('/*', i)) {
+      const close = text.indexOf('*/', i + 2);
+      if (close === -1) throw new Error('wrangler.jsonc is not valid JSONC.');
+      i = close + 1;
+      bare += ' ';
+    } else bare += text[i];
+  }
+  let json = '';
+  for (let i = 0; i < bare.length; i++) {
+    if (bare[i] === '"') {
+      const end = stringEnd(bare, i);
+      json += bare.slice(i, end);
+      i = end - 1;
+      continue;
+    }
+    if (bare[i] === ',') {
+      TRAILING_COMMA.lastIndex = i + 1;
+      if (TRAILING_COMMA.test(bare)) continue;
+    }
+    json += bare[i];
+  }
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw new Error('wrangler.jsonc is not valid JSONC.');
+  }
+}
+
+/**
+ * The preview namespace id, read from wrangler.jsonc.
  * @param {string} text
  * @returns {string}
  */
 export function previewNamespaceId(text) {
-  const { config, error } = ts.parseConfigFileTextToJson(
-    'wrangler.jsonc',
-    text,
-  );
-  if (error) throw new Error('wrangler.jsonc is not valid JSONC.');
+  const config = parseJsonc(text);
   const id = config?.previews?.kv_namespaces?.find(
     (/** @type {{ binding: string }} */ ns) => ns.binding === 'AUTH_KV',
   )?.id;
@@ -87,11 +141,10 @@ export function isNotFound(output) {
 
 /**
  * Whether a thrown wrangler CLI error is the genuine "key not found" signal for `--remote`/
- * `--preview` (checked against a live probe of wrangler 4.141: see the fix-round report for the
- * captured exit code, stdout and stderr). Unlike `--local`, a remote miss is a KV REST API 404,
- * which wrangler surfaces as a non-zero exit with "... 404: Not Found" on stderr (occasionally
- * also echoed on stdout). Every other failure — 401, 403, a 5xx, ENOTFOUND, any other network
- * error — must rethrow: only a genuine 404 is "missing".
+ * `--preview` (checked against a live probe of wrangler 4.141 and the 4.157 source). Unlike
+ * `--local`, a remote miss is a KV REST API 404, which wrangler surfaces as a non-zero exit with
+ * "... 404: Not Found" on stderr (occasionally also echoed on stdout). Every other failure — 401,
+ * 403, a 5xx, ENOTFOUND, any other network error — must rethrow: only a genuine 404 is "missing".
  * @param {{ stderr?: string, stdout?: string }} err
  * @returns {boolean}
  */

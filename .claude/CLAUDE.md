@@ -39,7 +39,7 @@ skills/
   astro-cloudflare-passkey-login/      ← THE SECOND SKILL — live site → private site
     SKILL.md         — preconditions, inputs, 12 steps, completion
     references/
-      technical-design.md    — the ported design: architecture, KV model, flows, gate, threat model, verified facts
+      technical-design.md    — the design record: architecture, KV model, flows, gate, threat model, verified facts
       pitfalls.md            — symptom → fix table
       resume.md              — evidence one-liner + rules for picking up a half-done run
     assets/
@@ -79,26 +79,36 @@ The skill reaches people through one path: **this repo → GitHub → the `kanji
 
 ## Design principles: hard-won, don't quietly undo them
 
-These came out of several rounds of multi-agent review, cold end-to-end re-tests and the v2 audit (Sept 2026). The choices are deliberate:
+These came out of several rounds of multi-agent review, cold end-to-end re-tests, the v2 audit (Sept 2026) and the v3 currency audit (Nov 2026). The choices are deliberate:
 
 - **Sites ship UNSTYLED.** `global.css` carries only a universal reset (`box-sizing`, responsive images), with no colors, fonts or layout. Styling is explicitly handed to the user. Don't add opinionated styling.
 - **Two-role model.** 🤖 Claude runs commands; 👤 the user does browser and dashboard steps (marked `👤 USER ACTION`). Each hand-off follows the same pattern: state it, wait, verify. Automate only the *verify* half of a hand-off (`wrangler whoami --json`, `curl -sI`, `gh` check runs, `verify_site.py --local`). Anything that needs an account, money or a browser stays with the user.
-- **Verified baseline** (2026-09-26). The single source of truth is the *Versions & sources* table in SKILL.md, and Step 4's `npm ls` drift check enforces it. If you revise one, revise the other, plus README *Notes*.
+- **The verified baseline** (2026-11-05). The single source of truth is the *Versions & sources* table in SKILL.md, and Step 4's `npm ls` drift check enforces it. If you revise one, revise the other, plus README *Notes* and the passkey skill's *Versions* table.
 
   | | Verified | Floor the skill states |
   |---|---|---|
-  | astro | 7.3.5 | ^7.2 (`session: false`) |
-  | @astrojs/cloudflare | 14.3.3 | ^14.2 |
-  | wrangler | 4.141.0 | ≥4.135 (Worker Previews) |
-  | Node | 24 LTS (`.nvmrc`); tested on 22.16 | 22.12 (preflight FAILs below it, WARNs below 22.19) |
-  | Python (scripts) | 3.9.6 | 3.9 |
-  | Claude Code | 2.1.283 | — |
+  | astro | 7.4.5 | ^7.4 (adapter 14.4 peer; `session: false` needs ≥7.2) |
+  | @astrojs/cloudflare | 14.4.4 | ^14.4 |
+  | wrangler | 4.157.0 | ≥4.135 (Worker Previews) |
+  | create-astro | 5.3.1 | 5.x (`--no-ai`) |
+  | @astrojs/sitemap | 3.7.4 | 3.7 |
+  | @astrojs/check / typescript | 0.9.12 / 6.0.3 | TS ^6 (TS 7 unsupported by `astro check`) |
+  | @types/node | 26.6.6 | matches `.nvmrc` major |
+  | sharp | 0.35.5 | ^0.35.4 (astro optional dep) |
+  | Node | 26 LTS (`.nvmrc`); tested on 26.10 | 22.23.4 (preflight FAILs below it) |
+  | Python (scripts) | 3.9.6 (macOS system) | 3.9 |
+  | Claude Code | 2.1.318 | — |
+  | @simplewebauthn/server / browser | 14.0.3 / 14.0.0 | ^14 |
 
-- **Keep the adapter, deliberately.** A purely static site doesn't *need* `@astrojs/cloudflare`, and dropping it was evaluated and rejected. It gives workerd-based `astro dev`/`preview`, auto-injected `/_astro/*` immutable caching, and a one-line `prerender = false` opt-in to on-demand pages.
+- **Node 26 LTS pin, 22.23.4 floor.** `.nvmrc` says `26`; Workers Builds installs that major (its default is 24). Astro ≥7.4.2 refuses to start below 22.23.4. Preflight FAILs below the floor and WARNs on odd majors.
+- **TypeScript stays on 6.** TS 7 is the Go port with no JS API; `astro check` refuses it and `@astrojs/check` peers `^5 || ^6`. Step 4 installs `typescript@6`, and the shipped Dependabot config ignores the `typescript` major.
+
+- **Keep the adapter, deliberately.** A purely static site doesn't *need* `@astrojs/cloudflare`, and dropping it was evaluated and rejected. It gives workerd-based `astro dev`/`preview`, `/_astro/*` immutable caching (the adapter would inject the identical rule but skips it because `_headers` already sets one), and a one-line `prerender = false` opt-in to on-demand pages.
 - **The static build is an assets-only, binding-free Worker.**
   - The output is `dist/client/wrangler.json`, with no `main` and no bindings; the dry run prints `No bindings found.`
   - `session: false` (Astro 7.2+) removes the SESSION KV binding, so there is **no KV step**.
-  - The adapter generates `wrangler.jsonc`; the skill keeps it and makes two small edits (`compatibility_date` = today, `assets.not_found_handling: "404-page"`). Don't hand-write a minimal one.
+  - The adapter generates `wrangler.jsonc`; the skill keeps it and makes three small edits (`compatibility_date` = today, `assets.not_found_handling: "404-page"`, `"previews": {}`). Don't hand-write a minimal one.
+- **`previews: {}` is required.** `wrangler preview`, the Workers Builds preview command, refuses to run without a `previews` block. Empty is fine.
 - **`imageService: 'compile'`** transforms images with sharp at build time and adds **no `IMAGES` binding**. It is also much faster (27 ms vs 1.9 s in testing). The default `'cloudflare-binding'` also works on static pages since adapter 14.3.2, but it attaches a Cloudflare Images binding.
 - **One complete `astro.config.mjs` block at Step 4.** Later changes are small targeted Edits (`site`; `scriptDirective` added inside `security.csp`). `assets/site/.prettierrc` sets `singleQuote` so that block, and `global.css`, stay Prettier-clean — keep the Step 4/16 snippets in Prettier's output style. This stops keys from being dropped across piecemeal edits.
 - **CSP:** Astro emits a hashed `<meta>` CSP (with `object-src 'none'` and `base-uri 'self'`, and `syntaxHighlight: false` because Shiki is CSP-incompatible).
@@ -118,17 +128,35 @@ These came out of several rounds of multi-agent review, cold end-to-end re-tests
 - `verify_site --json`;
 - vendoring `verify_site.py` into sites, or npm scripts that point into the plugin cache;
 - committing `extraKnownMarketplaces`/`enabledPlugins` or the Builds MCP into generated sites;
-- HSTS `preload` by default.
+- HSTS `preload` by default;
+- adapter 15 / `cf` until GA (see *Watch* below);
+- the Workers Builds REST API in place of the dashboard connect (the GitHub App install is still a browser step; keep the two-role model).
 
 ## The passkey-login skill
 
-- **Provenance.** `assets/site/` is a de-branded copy of the private sign-in built on twofabianos (`main`, commit `62a9a67`). Allowed differences: cookie names `__Host-auth-*`; event `auth:state`; `src/data/auth.ts` as a template (it also exports `RP_NAME` and `SITE_ORIGIN`, which `config.ts` and `invite.mjs` read instead of `data/site.ts` and a hard-coded origin); the hooks `Symbol.for` key; `kv()` in `kv.mjs` takes an injectable `readConfig` so the shipped test never reads the real `wrangler.jsonc`; generic wording in `invite.mjs` and one `redirect.ts` comment; `allowlist.ts` as a template without `/sw.js`, `/og-v1.png`, `/brand/**`, with `/og.webp`. Tests: only the pure-helper suites ship (the handler suites depend on twofabianos's two users), with URLs and names made generic and `auth-data.test.ts` rewritten to check the shape of `USERS`. Any other difference is a porting bug. To update, re-copy from twofabianos and re-apply the renames (Task 4 of `docs/superpowers/plans/2026-09-28-passkey-login-skill.md`).
+- **Source of truth.** `assets/site/` is this plugin's own code; it has no upstream. Change it here, keep the unit suites green (see *Testing a change*), and re-run the cold test.
 - **No `scripts/` of its own.** It calls the setup skill's `verify_site.py --gated` by sibling path (`${CLAUDE_SKILL_DIR}/../astro-cloudflare-workers-setup/scripts/`), which holds because both skills ship in one plugin.
 - **Principles:** private = noindex on every response, OG kept so link previews work; the gate lives in the Worker entry, not middleware (middleware runs at build time for prerendered pages); ≥1 on-demand route always (an all-prerendered build silently drops `main`; the build guard enforces it); the `previews` block is required (Previews inherit nothing); the Worker sets headers itself (`_headers` doesn't apply to Worker-generated responses); fail closed; public by extension, never by directory; unstyled lock page; every setup invariant kept (`output: 'static'`, `session: false`, `imageService: 'compile'`, meta CSP, `not_found_handling`, no HSTS `preload`).
 - **Rejected:** Cloudflare Access, a password gate, Better Auth / Auth.js, Lucia, Playwright in generated sites, path-prefix gating, `secrets.required`, challenges in KV, a `returnTo` parameter.
-- **Testing:** the verifier fixture is in the plan (Task 1); the cold test is Task 6: a scratch site from the setup skill's Phase A, then this skill's Steps 1–7, then the negative build-guard run. On-invoke cost: about 5.3k tokens (2.1.0).
+- **Testing:** the verifier fixture is in the plan (Task 1); the cold test is Task 6: a scratch site from the setup skill's Phase A, then this skill's Steps 1–7, then the negative build-guard run. On-invoke cost: see *Testing a change*.
 
-**Watch:** Cloudflare's `cf` CLI (1.0.0-beta.1 as of Sept 2026) is beta, keeps a second credential store, and is slated to merge into wrangler. Don't adopt it. Revisit when it reaches GA or lands inside wrangler.
+## Watch: adapter 15 / `cf` migration path
+
+Decided (Nov 2026): stay on adapter 14 + wrangler until the revisit triggers below fire.
+
+- **Status (2026-11-05).** `@astrojs/cloudflare@latest` is 14.4.4; 15 is beta only (`15.0.0-beta.5`, `beta` tag), peers astro `^7.4.4-beta.0`, has no wrangler peer, and runs on `@cloudflare/vite-plugin` 2.0 beta. `cf` is `1.0.0-beta.27` (npm `latest`, documented as beta); `cloudflare.config.ts` is open beta. No GA date anywhere. Cloudflare's stated plan: when the beta ends, a final wrangler major points to `cf`, with 18 months of wrangler maintenance after.
+- **Hard stop.** Adapter 15 refuses to build a project that has `wrangler.jsonc` and no `cloudflare.config.ts` ("Run `npx cf migrate --bundler vite`"). Once `@latest` is 15, `npm i @astrojs/cloudflare@latest` breaks every generated site; Step 4 and `maintenance.md` say to pin `@14` until this migration ships.
+- **Unchanged in 15:** default entrypoint; SESSION/IMAGES auto-bindings (still removed by `session: false` + `imageService: 'compile'`); the `ASSETS` binding; the `/_astro/*` injection and its skip-if-present rule.
+- **What changes for a generated site:**
+  - Packages: `npm i -D cf` and `@astrojs/cloudflare@15`; keep `wrangler` while any wrangler command is used (wrangler doesn't read `cloudflare.config.ts`, so `wrangler.jsonc` stays too).
+  - Config: in a clean tree, `npx cf migrate --bundler vite --dry-run`, then without `--dry-run`. It writes `cloudflare.config.ts` (`worker.name`, `worker.compatibilityDate`, `worker.assets.notFoundHandling`, …; `assets.directory` comes from Vite; `previews` becomes a `ctx.isPreview` branch) and exits 1, with a `throw` at the top, until `[required]` items are resolved.
+  - Files: `.cloudflare/` in `.gitignore`; `cloudflare.config.ts` and `.cloudflare/types` in `tsconfig.json` `include`; the `generate-types` (`wrangler types`) script goes.
+  - Scripts: `deploy` → `astro check && cf deploy`, `verify` → `astro check && cf deploy --dry-run` (`cf` runs Astro's build, not npm scripts). Wrangler can't deploy Vite plugin v2 output.
+  - Workers Builds: deploy/preview commands → `npx cf deploy` / `npx cf previews deploy`. Not yet documented by Cloudflare, nor whether Builds' auto-created token works with `cf`.
+  - Still wrangler: `wrangler tail`, a single `secret put`, and the passkey skill's `kv namespace create`, remote `kv key …` and `preview base-config secret put` (no `cf` equivalents mapped yet).
+  - Auth: `cf` keeps its own store (`cf auth login`) but reads `CLOUDFLARE_API_TOKEN` first, so a token lane needs no second login. It needs Node ≥22.18 (the floor covers it).
+- **Guard rail.** Never run `cf dev|build|deploy|init` in an unmigrated wrangler project, CI included: it writes a fresh `cloudflare.config.ts` that ignores `wrangler.jsonc` and rewrites `package.json`, the lockfile and `.gitignore` without asking when there's no TTY. Since wrangler 4.150, `wrangler deploy`, `versions upload` and `preview` refuse to run while `.cloudflare/output/` exists; `--dry-run` still passes, so `npm run verify` won't catch it.
+- **Revisit when** `@astrojs/cloudflare` `latest` moves to 15; `cf` drops "beta"; Vite plugin v2 reaches GA; the Workers Builds docs show `cf deploy`; or `cf` gains single-secret and tail support. Then migrate a scratch site, run Phase A cold, update Steps 4–9 and 12, the template, this guide's *Generated-site contract* and the passkey ops, and bump the major.
 
 ## Testing a change
 
@@ -149,11 +177,14 @@ Paths below are relative to `skills/astro-cloudflare-workers-setup/`.
   - Run it twice; the second run must produce byte-identical output.
 - **Plugin:** both of these must pass.
   ```sh
-  claude plugin validate . --strict                           # marketplace manifest
-  claude plugin validate .claude-plugin/plugin.json --strict  # plugin: manifest, skills, root files
+  claude plugin validate . --strict                           # marketplace + plugin (since 2.1.289)
+  claude plugin validate .claude-plugin/plugin.json --strict  # plugin alone (redundant, harmless)
   ```
-  Then run `claude --plugin-dir . plugin details astro-cloudflare-workers-setup` to watch each skill's on-invoke token cost (v1 was about 15.5k; v2.0 is about 19.3k after moving the resume map and Phase E into references, mostly the inline Step 13 Layout block and rationale bullets, which are the first places to trim). `claude plugin eval` is available if an `evals/` suite is added.
-- **The procedure:** if you change the setup steps, have a fresh agent run **Phase A (Steps 1–9)** under `claude --plugin-dir <repo>` in a throwaway **empty** temp directory. Nothing may exist in the folder before the scaffold. Phase A needs no accounts and ends with `npm run verify`: 0 errors, `Complete!`, `No bindings found.`
+  Then run `claude --plugin-dir . plugin details astro-cloudflare-workers-setup` to watch each skill's on-invoke token cost (v1 was about 15.5k; v2.1.1 measured about 19.8k for the setup skill and 5.5k for passkey-login; v3.0.0 measures about 20.8k and 5.9k on Claude Code 2.1.318, with ~495 tokens always-on; keep the setup skill near 21k. The inline Step 13 Layout block and rationale bullets are the first places to trim). `claude plugin eval` is available if an `evals/` suite is added.
+- **Workers Builds in a cold test:** when the account's GitHub App already covers the owner's repos, `POST /accounts/{id}/builds/workers` (script tag, GitHub numeric ids, an existing build token uuid, `previews_enabled: true`) connects the throwaway repo without the dashboard; the production build and a branch Preview then prove the `.nvmrc` and `previews` choices. Users still go through the dashboard (Step 12).
+- **Passkey unit suites:** in a scratch copy of `skills/astro-cloudflare-passkey-login/assets/site/`, add `assets/templates/auth.ts.template` → `src/data/auth.ts` (fill `<apex>`, `<site-name>`, `<user-1>`, `<user-2>`) and `allowlist.ts.template` → `src/lib/gate/allowlist.ts`, a `package.json` with `"type": "module"`, and `npm i @simplewebauthn/server@14 @simplewebauthn/browser@14` (no `typescript`); then `node --test 'tests/unit/*.test.ts'`. Expect 69/69, on Node 26 and on 24 (`npx -y -p node@24 node --test …`).
+- **Edit and test in separate sessions.** A `--plugin-dir` directory is a protected path, so in a `claude --plugin-dir .` session Claude's own edits to the repo prompt (or go to the auto-mode classifier). Edit from a normal session; test in the `--plugin-dir` one.
+- **The procedure:** if you change the setup steps, have a fresh agent run **Phase A (Steps 1–9)** under `claude --plugin-dir <repo>` in a throwaway **empty** temp directory. Nothing may exist in the folder before the scaffold. Phase A needs a GitHub account for Step 1 (`gh repo create`) but no Cloudflare account, and ends with `npm run verify`: 0 errors, `Complete!`, `No bindings found.`
 - Phases B–E need real GitHub/Cloudflare accounts and a browser, so review them rather than running them.
 
 ## Releasing
@@ -165,7 +196,7 @@ Release from `main`.
 3. **Commit and push.**
 4. **Tag:** `claude plugin tag --push` from the repo root.
    - It checks that `plugin.json` and the marketplace entry agree, refuses on a dirty tree, and creates and pushes the annotated tag `astro-cloudflare-workers-setup--vX.Y.Z` to `origin`.
-   - Preview it with `--dry-run`.
+   - Preview it with `--dry-run`. It exits 1 ("already exists locally") until the version is bumped.
    - Optionally follow with `gh release create astro-cloudflare-workers-setup--vX.Y.Z`.
 5. **Update the owner's install:** `claude plugin marketplace update kanjidoc && claude plugin update astro-cloudflare-workers-setup@kanjidoc`, then restart or run `/reload-plugins`.
 

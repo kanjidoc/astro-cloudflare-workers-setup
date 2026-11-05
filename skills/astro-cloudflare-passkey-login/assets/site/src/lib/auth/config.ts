@@ -1,4 +1,4 @@
-// Auth constants and settings. One place for every lifetime (technical spec §5.5, §14).
+// Auth constants and settings. One place for every lifetime (technical design §5.5).
 import { RP_NAME } from '../../data/auth.ts';
 
 /** Session lifetime: 24 h from the unlock, fixed, never renewed. Cookie Max-Age and KV TTL. */
@@ -7,7 +7,7 @@ export const SESSION_TTL_S = 86_400;
 export const INVITE_TTL_S = 604_800;
 /** Signed challenge cookie lifetime. */
 export const CHALLENGE_TTL_S = 300;
-/** One-time arrival cookie lifetime (the bloom on the next gated page). */
+/** One-time arrival cookie lifetime (the site's own unlock effect on the next gated page). */
 export const ARRIVAL_TTL_S = 30;
 
 /** The subset of Workers KV the auth code uses. `KVNamespace` satisfies it; tests use a fake. */

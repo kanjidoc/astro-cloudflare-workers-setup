@@ -37,7 +37,8 @@ get 401 with the security headers, and /auth/session must answer 401.
 Exit codes:
     0  no check failed (warnings may be present)
     1  at least one check failed
-    2  invalid input, or the homepage could not be reached at all
+    2  invalid input, or the homepage could not be reached at all (or, live,
+       answered 404/5xx — nothing deployed)
 
 Python 3.9+, standard library only. No third-party dependencies.
 """
@@ -515,9 +516,13 @@ def check_homepage(ctx):
                 "final URL is not https: " + resp.final_url,
                 "ensure HTTPS is enabled and HTTP redirects to HTTPS")
     if resp.status != 200:
+        hint = "the homepage route should return 200"
+        if resp.status == 404 or resp.status >= 500:
+            hint = ("nothing seems to be deployed at this host (a 404 whose "
+                    "body is `error code: 1042` means no Worker exists under "
+                    "this name) — deploy first, then re-run")
         return (FAIL, "Homepage reachable over HTTPS",
-                "got HTTP {}".format(resp.status),
-                "the homepage route should return 200")
+                "got HTTP {}".format(resp.status), hint)
     return (PASS, "Homepage returns 200 over HTTPS", resp.final_url)
 
 
@@ -1063,6 +1068,15 @@ def check_robots(ctx):
     return (PASS, name, "returns 200, crawlable, lists a sitemap")
 
 
+def looks_like_platform_error(body_lower):
+    """True for Cloudflare's own error pages (e.g. `error code: 1042` when no
+    Worker exists, or the HTML page with a `cf-error-details` block), which
+    a naive "is it HTML?" test would mistake for a site's 404.html."""
+    if re.search(r"error code:\s*\d{3,4}", body_lower):
+        return True
+    return "cf-error-details" in body_lower or "cf-wrapper" in body_lower
+
+
 def check_custom_404(ctx):
     """
     A path that cannot exist returns a real 404 carrying the custom HTML page.
@@ -1104,6 +1118,11 @@ def check_custom_404(ctx):
 
     if resp.status == 404:
         body = resp.body.lower()
+        if looks_like_platform_error(body):
+            return (FAIL, name, via + "404 is Cloudflare's own error page, "
+                    "not the site's 404.html",
+                    "nothing is deployed at this host, or the deploy has no "
+                    "404.html — " + hint_nfh)
         if "<html" in body or "<!doctype html" in body:
             return (PASS, name, via + "404 with the custom HTML page")
         return (FAIL, name, via + "404 but with an empty/non-HTML body",
@@ -1573,6 +1592,16 @@ def main(argv=None):
             base_url, ctx["base"])))
         print("")
     results = Results(style)
+    home_status = ctx["home"].status
+    if not args.local and (home_status == 404 or home_status >= 500):
+        run_check(results, check_homepage, ctx)
+        print("")
+        print(style.red("Stopping: the homepage returned HTTP {} — nothing "
+                        "appears to be deployed at {}.".format(
+                            home_status, ctx["base"])))
+        print("  Deploy (`npm run deploy`, or push to `main` with Workers "
+              "Builds connected), then re-run this check.")
+        return 2
 
     checks = [
         check_homepage,

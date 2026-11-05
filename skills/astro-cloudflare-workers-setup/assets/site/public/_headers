@@ -7,6 +7,6 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
 
-# The adapter already sends this for /_astro/*; kept as a fallback.
+# Immutable caching for Astro's hashed assets. While this rule exists the adapter skips its own (identical) injection.
 /_astro/*
   Cache-Control: public, max-age=31536000, immutable

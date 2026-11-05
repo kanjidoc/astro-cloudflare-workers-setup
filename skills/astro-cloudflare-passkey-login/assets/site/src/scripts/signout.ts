@@ -1,4 +1,4 @@
-// Menu "sign out" (technical spec §5.4). Delegated, so it works whenever the visual layer
+// Menu "sign out" (technical design §5.4). Delegated, so it works whenever the visual layer
 // renders the [data-auth-action="signout"] button.
 import { readyToLeave, setAuthState, type AuthState } from './hooks.ts';
 

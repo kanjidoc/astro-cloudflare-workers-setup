@@ -18,19 +18,19 @@ Turns a **live site built by `astro-cloudflare-workers-setup`** into a private o
 ## Preconditions — check, and stop with the reason if any fails
 
 ```bash
-node -v; grep -c '"assets"' wrangler.jsonc; grep -o '"pattern": "[^"]*"' wrangler.jsonc; grep -c "@astrojs/cloudflare" astro.config.mjs; grep -c "output: 'static'" astro.config.mjs; npm pkg get scripts.build scripts.verify scripts.deploy scripts.generate-types; cat .nvmrc; git status --porcelain | wc -l; npx wrangler whoami 2>/dev/null | grep -E 'Account Name|API Token|OAuth'; grep -oE '[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev' public/_headers wrangler.jsonc | head -1; ls src/worker.ts 2>/dev/null
+node -v; grep -c '"assets"' wrangler.jsonc; grep -o '"pattern": "[^"]*"' wrangler.jsonc; grep -c "@astrojs/cloudflare" astro.config.mjs; grep -c "output: 'static'" astro.config.mjs; npm pkg get scripts.build scripts.verify scripts.deploy scripts.generate-types; cat .nvmrc; git status --porcelain | wc -l; npx wrangler whoami 2>/dev/null | grep -E -A2 'Account Name|API Token|OAuth'; grep -oE '[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev' public/_headers wrangler.jsonc | head -1; ls src/worker.ts 2>/dev/null
 ```
 
 - **Built by the setup skill:** `assets` in `wrangler.jsonc`, the adapter and `output: 'static'` in `astro.config.mjs`, the four npm scripts, `.nvmrc`. Missing → this skill doesn't apply; say so.
 - **A custom domain is live:** a `routes[].pattern` exists and `curl -sI https://<apex>/` returns 200. Passkeys bind to that host; a site on `*.workers.dev` alone would strand every passkey the day it gets a domain. No domain → run the setup skill's Step 11 first.
 - **Authenticated:** `wrangler whoami` shows an account. Token present → never `wrangler login`. Nothing → 👤 ask the user to set `CLOUDFLARE_API_TOKEN` or log in once.
-- **Node ≥ 22.18** (`.nvmrc` says 24; the unit tests run `.ts` natively).
+- **Node ≥ 22.23.4** (`.nvmrc` says 26; type stripping runs the `.ts` tests natively).
 - **Clean git tree** (`git status --porcelain` prints nothing) and **`npm run verify` clean** before any change. Dirty → 👤 ask the user to commit or stash first; this skill branches and commits.
 - `src/worker.ts` already present → `references/resume.md`.
 
 ## Confirm inputs (one message)
 
-Read `<apex>` from `routes[].pattern` and `<name>` from `wrangler.jsonc`. `<backup-host>` is `<name>.<subdomain>.workers.dev`: the precondition grep finds it in `public/_headers` (setup Step 11 wrote a noindex block for it). If nothing prints, 👤 ask the user to copy it from the dashboard (Workers & Pages → the Worker → Settings → Domains & Routes). Confirm all three, don't ask. Ask:
+Read `<apex>` from `routes[].pattern` and `<name>` from `wrangler.jsonc`. `<backup-host>` is `<name>.<subdomain>.workers.dev`: the precondition grep finds it in `public/_headers` (setup Step 11 wrote a noindex block for it). If nothing prints, 👤 ask the user to copy it from the dashboard (Workers & Pages → the Worker → Settings → Domains & Routes). `<site-name>` is the site's display name (the `og:site_name` in `Layout.astro`). Confirm all four, don't ask. Ask:
 
 1. **Who signs in?** One to ten lowercase names (`[a-z0-9-]`, 1–32 chars, used as KV keys and in the greeting; the build refuses anything else). Default: the user's first name. A name may equal the site's name (the guard skips the lock page's `<head>`), but never put a name in a stylesheet, script or the lock page body.
 2. **Any extra public files the lock page will show?** Exact paths only (a logo). Default: none.
@@ -48,7 +48,7 @@ Read `<apex>` from `routes[].pattern` and `<name>` from `wrangler.jsonc`. `<back
 npm i @simplewebauthn/server@^14 @simplewebauthn/browser@^14 && npm ls @simplewebauthn/server @simplewebauthn/browser astro @astrojs/cloudflare wrangler --depth=0
 ```
 
-Expect `@simplewebauthn/*` 14.x, `astro` 7.x, `@astrojs/cloudflare` 14.x, `wrangler` ≥ 4.135. A different major → check the changelog before continuing and tell the user what moved (see *Versions*).
+Expect `@simplewebauthn/*` 14.x, `astro` 7.4+, `@astrojs/cloudflare` 14.4+, `wrangler` ≥ 4.135. A different major → check the changelog before continuing and tell the user what moved (see *Versions*).
 
 ### Step 3 — Copy the code
 
@@ -63,14 +63,14 @@ cp -R "${CLAUDE_SKILL_DIR}/assets/site/." . && ls src/worker.ts src/lib/auth src
 All from `${CLAUDE_SKILL_DIR}/assets/templates/`. Replace every `<placeholder>`; afterwards this grep must print nothing:
 
 ```bash
-grep -rnE '<(apex|backup-host|kv-id|preview-kv-id|user-[0-9]|site-name|extra-public-path)>' src wrangler.jsonc
+grep -rnE '<(apex|backup-host|kv-id|preview-kv-id|user-[0-9]|site-name)>' src wrangler.jsonc
 ```
 
 - `auth.ts.template` → `src/data/auth.ts`: the names from Q1. Copy strings may be reworded, never removed.
 - `allowlist.ts.template` → `src/lib/gate/allowlist.ts`: add Q2's exact paths to `PUBLIC_FILES` (none → copy as is). Never a directory or wildcard, never an image under `/_astro/`.
 - `lock.astro.template` → `src/pages/lock.astro` and `invite.astro.template` → `src/pages/invite/[token].astro`: set the `Layout` import path and the `title`. Keep every `data-*` hook and the closing `<script>` unchanged.
-- `wrangler.additions.jsonc` → **targeted Edits** to `wrangler.jsonc`: set `main`, add `run_worker_first` inside the existing `assets`, add `kv_namespaces` (without `id` for now), `ratelimits`, `vars`, `previews`. Never rewrite the file; keep `compatibility_date`, `routes`, `observability` as they are.
-- `package.json`: `"build": "astro check && astro build && node --test tests/build-guard.test.ts"`, `"test": "node --test tests/unit/"`, `"invite": "node scripts/auth/invite.mjs"`, `"auth:list": "node scripts/auth/list.mjs"`, `"auth:revoke": "node scripts/auth/revoke.mjs"`. `verify` and `deploy` are unchanged.
+- `wrangler.additions.jsonc` → **targeted Edits** to `wrangler.jsonc`: set `main`, add `run_worker_first` inside the existing `assets`, add `kv_namespaces` (without `id` for now), `ratelimits`, `vars`, and replace the setup skill's empty `"previews": {}` with the template's `previews` block. Never rewrite the file; keep `compatibility_date`, `routes`, `observability` as they are.
+- `package.json`: `"build": "astro check && astro build && node --test tests/build-guard.test.ts"`, `"test": "node --test 'tests/unit/*.test.ts'"` (a quoted glob: a bare directory argument needs Node ≥ 26.8), `"invite": "node scripts/auth/invite.mjs"`, `"auth:list": "node scripts/auth/list.mjs"`, `"auth:revoke": "node scripts/auth/revoke.mjs"`. `verify` and `deploy` are unchanged.
 - `.gitignore`: append `.dev.vars*` and `!.dev.vars.example`.
 - `src/layouts/Layout.astro`: add `chrome?: 'page' | 'none'` to `Props` (default `'page'`). Everything that is site chrome — header, nav, footer, and the two scripts `<script src="../scripts/arrival.ts"></script>` and `<script src="../scripts/signout.ts"></script>` — renders only when `chrome === 'page'`; `<slot />` always renders. Anonymous visitors see the lock page with `chrome="none"`, so nothing in the chrome (page titles in a nav, a sign-out button) may leak. If the site has a header component, add a `<button type="button" data-auth-action="signout">` to it (unstyled). The lock and invite pages pass `chrome="none"`; make `src/pages/404.astro` pass it too (the Worker serves the site's 404 for unknown `/auth/*` and `/invite/*` paths).
 - `public/_headers`: add the comment `# src/worker.ts runs first and sets these same headers on every response it returns; these rules still reach asset responses, but the Worker is authoritative.` If the site customised its headers (dropped `includeSubDomains`, changed `Referrer-Policy` or `Permissions-Policy`), mirror that in `src/lib/gate/headers.ts`, which otherwise re-imposes the defaults on every response.
@@ -89,7 +89,7 @@ Then `npx prettier --write src --log-level warn` (not `wrangler.jsonc`: Prettier
 npm test && npm run verify
 ```
 
-Expect two `node --test` summaries with `fail 0` (the unit suites, then the build guard's 5 tests after the build), `astro check` `0 errors`, then the dry run: `Configuration being used: "dist/server/wrangler.json"`, an `Attaching additional modules` table, and `Your Worker has access to the following bindings:` listing `AUTH_KV`, `AUTH_RATE_LIMIT`, `ASSETS` and the three vars. **`No bindings found.` means the gate was dropped**: see `references/pitfalls.md`, first row.
+Expect two `node --test` summaries, both `fail 0` (the unit suites, then the build guard's 5 tests after the build), `astro check` `0 errors`, then the dry run: `Configuration being used: "dist/server/wrangler.json"`, an `Attaching additional modules` table, and `Your Worker has access to the following bindings:` listing `AUTH_KV`, `AUTH_RATE_LIMIT`, `ASSETS` and the three vars. **`No bindings found.` means the gate was dropped**: see `references/pitfalls.md`, first row.
 
 ### Step 7 — Local gate check
 
@@ -107,10 +107,10 @@ Expect 0 FAIL and `HTTP/1.1 401`. Normal: SKIPs for HTTPS/Cloudflare, and a WARN
 Tell the user: two free KV namespaces and one secret will be created on the account. Then:
 
 ```bash
-W="$PWD/node_modules/.bin/wrangler"; cd "$(mktemp -d)" && "$W" kv namespace create <name>-auth && "$W" kv namespace create <name>-auth-preview; cd -
+npx wrangler kv namespace create <name>-auth --update-config=false && npx wrangler kv namespace create <name>-auth-preview --update-config=false
 ```
 
-Run from an empty directory so wrangler can't rewrite `wrangler.jsonc`, with the project's own wrangler (a bare `npx wrangler` there would download the latest). Paste the two ids into `kv_namespaces[0].id` and `previews.kv_namespaces[0].id`. Then:
+Run from the project root with the project's wrangler; `--update-config=false` stops wrangler from rewriting `wrangler.jsonc` (a non-interactive run never writes it anyway). Older wrangler without the flag: `W="$PWD/node_modules/.bin/wrangler"; cd "$(mktemp -d)" && "$W" kv namespace create <name>-auth && "$W" kv namespace create <name>-auth-preview; cd -`. Paste the two ids into `kv_namespaces[0].id` and `previews.kv_namespaces[0].id`. Then:
 
 ```bash
 openssl rand -base64 32 | npx wrangler secret put AUTH_COOKIE_SECRET
@@ -118,11 +118,11 @@ openssl rand -base64 32 | npx wrangler preview base-config secret put AUTH_COOKI
 npx wrangler secret list
 ```
 
-The secret is never printed or stored anywhere else. `npm run verify` again; the ids don't change its output.
+The secret is never printed or stored anywhere else. Base-config secrets are copied only when a Preview is created, so set it before the branch's first push (this order does); a Preview created earlier needs `npx wrangler preview secret put AUTH_COOKIE_SECRET --name <branch>`. `npm run verify` again; the dry run now shows each id next to `env.AUTH_KV`.
 
 ### Step 9 — Push the branch
 
-Commit and `git push -u origin feat/passkey-login`. With Workers Builds connected (setup Step 12), the branch gets a Worker Preview that shows the lock page (👤 optional look; sign-in there is impossible by design). Check the run with the setup skill's `gh api` line for the branch.
+Commit and `git push -u origin feat/passkey-login`. With Workers Builds connected (setup Step 12), the branch gets a Worker Preview at `https://feat-passkey-login-<name>.<subdomain>.workers.dev` that shows the lock page (👤 optional look; sign-in there is impossible by design). Check the run with the setup skill's `gh api` line for the branch. If the Worker was connected before Worker Previews existed (preview command `npx wrangler versions upload`, Previews off), 👤 enable Preview Builds or take the one-way **Set up Worker Previews** switch first.
 
 ### Step 10 — Deploy
 
@@ -145,7 +145,7 @@ npm run invite -- <first-name>
 
 ### Step 12 — Docs
 
-Append `assets/templates/claude-md-section.md` (placeholders filled) to the site's `CLAUDE.md`. Add a `CHANGELOG.md` entry ("Private passkey sign-in") and a README line. Commit and push. Tell the user: the site is private, the lock page is unstyled on purpose, and how to invite, list and revoke.
+Append `assets/templates/claude-md-section.md` to the site's `CLAUDE.md`, with `<apex>` filled and its first-line comment removed (`<name>`, `<id8>`, `<n>` are argument syntax and stay). Add a `CHANGELOG.md` entry ("Private passkey sign-in") and a README line. Commit and push. Tell the user: the site is private, the lock page is unstyled on purpose, and how to invite, list and revoke.
 
 ## Completion
 
@@ -158,10 +158,10 @@ Append `assets/templates/claude-md-section.md` (placeholders filled) to the site
 
 `references/pitfalls.md`. The three that matter most: an all-prerendered build **silently drops the Worker** (build guard); Worker Previews **inherit nothing** (`previews` block); `_headers` **doesn't apply** to Worker-generated responses (the Worker sets headers).
 
-## Versions (verified 2026-09-28)
+## Versions (verified 2026-11-05)
 
 | Package | Verified | Floor |
 | :-- | :-- | :-- |
-| `@simplewebauthn/server` / `browser` | 14.0.3 / 14.0.0 | ^14 (pins `supportedAlgorithmIDs`; v14 otherwise prefers ML-DSA) |
-| astro / `@astrojs/cloudflare` / wrangler | 7.3.5 / 14.3.3 / 4.141.0 | the setup skill's floors |
-| Node | 24 | 22.18 for `node --test` on `.ts` |
+| `@simplewebauthn/server` / `browser` | 14.0.3 / 14.0.0 | ^14 (pins `supportedAlgorithmIDs`; v14 otherwise puts ML-DSA-44 first where `SubtleCrypto.supports('verify', 'ML-DSA-44')` is true: workerd only with `webcrypto_modern_algorithms`) |
+| astro / `@astrojs/cloudflare` / wrangler | 7.4.5 / 14.4.4 / 4.157.0 | the setup skill's floors |
+| Node | 26 (`.nvmrc`) | 22.23.4 |

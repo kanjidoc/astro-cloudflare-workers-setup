@@ -1,3 +1,4 @@
+<!-- Fill <apex>, then delete this line. <name>, <id8> and <n> are argument syntax and stay. -->
 ## Private site: passkey sign-in
 
 Added with the `astro-cloudflare-passkey-login` skill. Every page needs a passkey session; there are no passwords and no identity provider.
@@ -16,11 +17,11 @@ Added with the `astro-cloudflare-passkey-login` skill. Every page needs a passke
 **Commands.**
 | Command | What |
 | :-- | :-- |
-| `npm test` | Unit tests for the pure auth and gate helpers (`node --test tests/unit/`) |
+| `npm test` | Unit tests for the pure auth and gate helpers (`node --test 'tests/unit/*.test.ts'`) |
 | `npm run invite -- <name> [--hours <n>]` | Prints a single-use invite URL (default 7 days). Send it over a private channel. |
 | `npm run auth:list` | Passkeys, sessions and pending invites |
 | `npm run auth:revoke -- --session <id8>` / `--credential <id8>` / `--user <name>` / `--invite <name>` | Revoke one device, one passkey (and its sessions), all of a person's sessions, or their invites |
-| `python3 <setup-skill-dir>/scripts/verify_site.py --gated https://<apex>` | Live gate check |
+| the setup skill's `verify_site.py --gated https://<apex>` | Live gate check |
 
 The scripts call `npx wrangler kv key … --binding AUTH_KV --remote` with `$CLOUDFLARE_API_TOKEN` (or the existing wrangler login). `--local` targets the preview's local KV.
 

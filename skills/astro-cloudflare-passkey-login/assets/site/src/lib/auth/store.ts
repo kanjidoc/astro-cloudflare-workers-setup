@@ -1,4 +1,4 @@
-// Typed access to the AUTH_KV namespace. The only module that knows key names (technical spec §4).
+// Typed access to the AUTH_KV namespace. The only module that knows key names (technical design §4).
 // Every value is JSON; a short summary is also stored as KV metadata so `wrangler kv key list`
 // shows everything in one call. Raw tokens are never stored, only their SHA-256.
 import type { User } from '../../data/auth.ts';

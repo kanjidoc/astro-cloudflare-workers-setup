@@ -8,7 +8,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 A static site — **<name / purpose / type>** — built with **Astro** and deployed to **Cloudflare Workers** via the **`@astrojs/cloudflare`** adapter (Workers Static Assets, *not* Cloudflare Pages). Static by default, with the adapter installed so individual pages can become dynamic later.
 
-Live at **https://<canonical-domain>**. Auto-deploys from GitHub on every push to `main` (Cloudflare Workers Builds).
+Live at **https://<canonical-domain>** (the `*.workers.dev` URL if there is no custom domain). Auto-deploys from GitHub on every push to `main` (Cloudflare Workers Builds).
 
 ## Commands
 
@@ -17,7 +17,7 @@ Live at **https://<canonical-domain>**. Auto-deploys from GitHub on every push t
 | `npm run dev` | Astro dev server (workerd) at `localhost:4321`. When an AI agent runs it, Astro backgrounds it and prints the URL — check with `npx astro dev status` / `logs`, stop with `npx astro dev stop` (not Ctrl-C or `pkill`). Don't use `wrangler dev`. |
 | `npm run check` | `astro check` type-check. |
 | `npm run build` | `astro check && astro build` → `dist/client/` (static assets + the generated `wrangler.json`). `dist/server/` is filled only once a page opts into on-demand rendering. Type errors fail the build, locally and in CI. |
-| `npm run preview` | Serves the production build (CSP and `_headers` active). Backgrounds itself under an agent — stop with `npx astro preview stop`. |
+| `npm run preview` | Serves the production build (CSP and `_headers` active). Backgrounds itself under an agent — stop with `npx astro preview stop` (`ASTRO_PREVIEW_BACKGROUND=0` runs it in the foreground). |
 | `npm run verify` | `build` + `wrangler deploy --dry-run` — no login, nothing deployed. Expect `0 errors`, `[build] Complete!`, `No bindings found.` |
 | `npm run deploy` | `build` + `wrangler deploy` from a laptop. **Pushing to `main` is the primary deploy path**; this is the fallback. |
 | `npm run generate-types` | Regenerate `worker-configuration.d.ts`. **Run after any `wrangler.jsonc` change.** |
@@ -25,15 +25,15 @@ Live at **https://<canonical-domain>**. Auto-deploys from GitHub on every push t
 ## Architecture
 
 - **The adapter owns the deploy config.** Edit only the root `wrangler.jsonc`. At build time the adapter generates `dist/client/wrangler.json` (or `dist/server/wrangler.json` once any route is on-demand) and `.wrangler/deploy/config.json` (the pointer `wrangler deploy` follows). Never hand-edit generated files. `name` in `wrangler.jsonc` must equal the Worker's name in the Cloudflare dashboard, or Workers Builds fails.
-- **`output: 'static'` + the Cloudflare adapter** — every page prerenders, so the deploy is an assets-only Worker: no script, no bindings. Opt one page into on-demand rendering with `export const prerender = false`. The adapter stays for workerd-based `dev`/`preview`, its auto-injected `/_astro/*` immutable caching, and that one-line opt-in.
+- **`output: 'static'` + the Cloudflare adapter** — every page prerenders, so the deploy is an assets-only Worker: no script, no bindings. Opt one page into on-demand rendering with `export const prerender = false` — and list its path in `assets.run_worker_first` (e.g. `["/account"]`), or browser navigations to it get `404.html`. The adapter stays for workerd-based `dev`/`preview`, the build-time `/_astro/*` immutable-caching injection it applies if `public/_headers` ever loses that rule, and that one-line opt-in.
 - **Sessions are disabled** (`session: false`) — no KV bindings. If sessions are ever needed, remove it; Wrangler auto-provisions the SESSION namespace on deploy.
 - **`imageService: 'compile'`** — `<Image>` from `astro:assets` works; images are optimized at build time into content-hashed `/_astro/` files. Chosen over the default `cloudflare-binding` because it needs no `IMAGES` binding and builds faster.
 - **Custom 404** — `src/pages/404.astro` builds to `dist/client/404.html`; served with a real 404 status because `wrangler.jsonc` sets `assets.not_found_handling: "404-page"`.
 - **CSP** — `security.csp` in `astro.config.mjs` (with `object-src 'none'` and `base-uri 'self'`); Astro hashes bundled scripts and styles and emits the policy as a `<meta>` tag. A meta CSP can't carry `frame-ancestors`, so `X-Frame-Options` stays in `public/_headers`. Inactive in `astro dev` — test with `build` + `preview`. Third-party script hosts (e.g. `https://static.cloudflareinsights.com`) must be listed in `security.csp.scriptDirective.resources`, together with `'self'`. `markdown.syntaxHighlight` is off because Shiki is CSP-incompatible — use `'prism'` if code blocks are added.
-- **Security headers** — `public/_headers` (HSTS, `nosniff`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, plus a `/_astro/*` immutable fallback). HSTS `preload` is deliberately absent — opt-in only, and removal from the preload list takes months.
+- **Security headers** — `public/_headers` (HSTS, `nosniff`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, plus the `/_astro/*` immutable caching rule — the adapter skips its identical injection when this rule exists). HSTS `preload` is deliberately absent — opt-in only, and removal from the preload list takes months.
 - **Fonts** — Astro's built-in Fonts API (`fonts:` config + `<Font />` from `astro:assets`). Do not add `@fontsource`.
 - **JSON-LD** — exported as `jsonLd` from `src/data/site.ts`, injected in `Layout.astro`.
-- **TypeScript** — `worker-configuration.d.ts` is committed; regenerate after any `wrangler.jsonc` change. `@types/node` matches the `.nvmrc` Node major.
+- **TypeScript** — `worker-configuration.d.ts` is committed; regenerate after any `wrangler.jsonc` change. `@types/node` matches the `.nvmrc` Node major. `typescript` stays on 6.x (`astro check` refuses TypeScript 7, the Go port with no JS API; Dependabot ignores its majors).
 
 ## Conventions
 
@@ -49,8 +49,9 @@ Live at **https://<canonical-domain>**. Auto-deploys from GitHub on every push t
 - **After editing `wrangler.jsonc`** — run `npm run generate-types`.
 - **Before claiming a deploy-ready state** — `npm run verify` must be clean. To check behavior (CSP, headers, 404), `npm run build && npm run preview`, then `npx astro preview stop`.
 - **CI/CD** — Cloudflare Workers Builds, not GitHub Actions. A push to `main` goes live within a couple of minutes; PRs and other branches get a Worker Preview (URL posted as a PR comment; `*.workers.dev` previews are `noindex` automatically). A failed build shows a red ✗ on the commit and the previous version stays live — `gh pr checks` or the commit's Workers Builds check run links to the build log.
-- **Dependencies** — Dependabot groups `astro`, `@astrojs/*`, `wrangler` and `@cloudflare/*` into one weekly PR; merge it once its Preview build passes. For an Astro major, run `npx @astrojs/upgrade --dry-run` first and follow the upgrade guide; keep dependency bumps in their own commits.
+- **Dependencies** — Dependabot groups `astro`, `@astrojs/*`, `wrangler` and `@cloudflare/*` into one weekly PR; merge it once its Preview build passes. `typescript` majors are ignored because `astro check` supports TS ≤ 6. For a major, list versions with `npm outdated` (`npx @astrojs/upgrade` prompts when a major is pending, even with `--dry-run`), follow the upgrade guide and install the majors explicitly (except `typescript`, held at 6, and `@astrojs/cloudflare`, held at 14 until its `cloudflare.config.ts`/`cf` migration); keep dependency bumps in their own commits.
 - **Custom domains** — declared in `wrangler.jsonc` `routes` with `workers_dev: true`. A code 100117 DNS conflict needs manual record deletion in the Cloudflare dashboard.
+- **Permissions** — project allow rules in `.claude/settings.json` apply once the folder is trusted; in auto mode (the default) broad package-manager rules are set aside and the classifier reviews those commands.
 - **Browser/auth steps** — dashboard configuration, and `wrangler login` when `npx wrangler whoami` shows no credential, must be done by the human.
 - **Make the site private** (passkey sign-in, no passwords) — run the `astro-cloudflare-passkey-login` skill from the plugin. It needs the custom domain live first.
 
@@ -61,9 +62,9 @@ Record project decisions, context, and direction **in this repository** — `CLA
 ## Accounts & domain
 
 - **GitHub repository:** <github-repo-URL> — auto-deploys to Cloudflare on every push to `main`.
-- **Cloudflare account:** hosts the Worker, the custom domain, and Web Analytics.
-- **Domain:** <canonical-domain> — registrar: <Cloudflare Registrar / external>.
-- **Credentials:** local deploys use `wrangler login` (OAuth) or `CLOUDFLARE_API_TOKEN` (takes priority when set). Workers Builds auto-creates its own scoped API token in the Cloudflare dashboard — don't delete it. No secrets live in this repo or in GitHub. Any token created by hand belongs in a gitignored `.env`; account passwords belong in a password manager.
+- **Cloudflare account:** hosts the Worker (plus the custom domain and Web Analytics, where used).
+- **Domain:** <canonical-domain> — registrar: <Cloudflare Registrar / external> (or: none; served at the `*.workers.dev` URL).
+- **Credentials:** local deploys use `wrangler login` (OAuth, Cloudflare's method for a person working interactively) or `CLOUDFLARE_API_TOKEN` (the method for CI and scripts; it takes priority when set). Workers Builds auto-creates its own scoped API token in the Cloudflare dashboard — don't delete it. No secrets live in this repo or in GitHub. Any token created by hand belongs in a gitignored `.env`; account passwords belong in a password manager.
 
 ## Reference
 

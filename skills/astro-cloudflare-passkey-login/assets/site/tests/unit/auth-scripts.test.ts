@@ -75,8 +75,7 @@ test('kv.get: only a genuine "not found" becomes null; every other wrangler fail
 });
 
 test('kv.get: a --remote/--preview 404 is null; every other failure (401/500/network) rethrows', () => {
-  // Wrangler 4.141's actual --remote output for a missing key (captured against a live probe,
-  // see the report): exit 1, nothing useful on stdout, this on stderr.
+  // Wrangler 4.141's actual --remote output for a missing key (captured against a live probe): exit 1, nothing useful on stdout, this on stderr.
   const REMOTE_404 =
     'Failed to fetch https://api.cloudflare.com/client/v4/accounts/x/storage/kv/namespaces/y/values/does-not-exist-probe - 404: Not Found';
 

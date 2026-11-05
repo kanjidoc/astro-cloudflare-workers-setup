@@ -1,5 +1,5 @@
-// The only things the visual layer and the technical layer share in JavaScript (design
-// overview → Hooks). The visual layer registers optional promises; the auth scripts await them.
+// The only things the visual layer and the technical layer share in JavaScript (technical
+// design §6). The visual layer registers optional promises; the auth scripts await them.
 // Kept on globalThis under a Symbol.for key so every bundle sees the same registry, even if a
 // bundler ever duplicates this module.
 

@@ -1,4 +1,4 @@
-// The gate (technical spec §2, §7). Runs before every request (assets.run_worker_first).
+// The gate (technical design §2, §7). Runs before every request (assets.run_worker_first).
 // Order: backup host → public allowlist → /auth/* and /invite/* → session → lock page or 401.
 // Security headers go on every response it returns.
 import { handle } from '@astrojs/cloudflare/handler';
@@ -97,7 +97,7 @@ async function servePrivate(
   if (!isHtml(res)) return applyGatedCache(res, pathname);
 
   // Who's signed in (every gated HTML response), and — only for the GET document response that
-  // actually renders the destination — the one-time arrival signal for the bloom.
+  // actually renders the destination — the one-time arrival signal for the site's own unlock effect.
   const arrival = readCookie(request, ARRIVAL_COOKIE);
   const decision = arrivalDecision(request, arrival);
   const attributes = {

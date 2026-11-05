@@ -1,4 +1,4 @@
-// Sessions: 24 h from the unlock, fixed, never renewed (technical spec §5.5).
+// Sessions: 24 h from the unlock, fixed, never renewed (technical design §5.5).
 // The cookie holds a random token; KV holds only its SHA-256.
 import type { User } from '../../data/auth.ts';
 import type { KVLike } from './config.ts';

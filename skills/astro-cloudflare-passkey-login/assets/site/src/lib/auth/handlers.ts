@@ -296,8 +296,8 @@ export async function inviteVerify(
 }
 
 /**
- * POST /auth/signout → 204. Revokes this device's session only, clears the cookie and asks the
- * browser to drop cached gated responses.
+ * POST /auth/signout → 204. Revokes this device's session only and clears the cookie. No
+ * Clear-Site-Data (technical design §5.4).
  */
 export async function signout(
   request: Request,

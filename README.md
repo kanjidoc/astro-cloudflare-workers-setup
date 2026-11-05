@@ -20,7 +20,7 @@ Tell Claude Code *"set up an Astro site on Cloudflare"* and it runs the whole th
 
 - [Claude Code](https://claude.com/claude-code)
 - A GitHub account and a Cloudflare account (both free)
-- Node.js 24 LTS (22.12 minimum), `git`, the GitHub CLI (`gh`), and Python 3.9+ (macOS ships it). The skill checks for these up front and guides you through installing anything missing.
+- Node.js 26 LTS (22.23.4 minimum), `git`, the GitHub CLI (`gh`), and Python 3.9+ (macOS ships it). The skill checks for these up front and guides you through installing anything missing.
 - macOS or Linux (on Windows, run inside WSL2).
 
 ## Install
@@ -30,6 +30,12 @@ Tell Claude Code *"set up an Astro site on Cloudflare"* and it runs the whole th
 ```sh
 claude plugin marketplace add kanjidoc/astro-cloudflare-workers-setup
 claude plugin install astro-cloudflare-workers-setup@kanjidoc
+```
+
+Or in one step (Claude Code 2.1.292 or later):
+
+```sh
+claude plugin install astro-cloudflare-workers-setup --marketplace kanjidoc/astro-cloudflare-workers-setup
 ```
 
 Then run `/reload-plugins` in an open session, or start a new one.
@@ -52,11 +58,26 @@ git clone https://github.com/kanjidoc/astro-cloudflare-workers-setup
 cp -R astro-cloudflare-workers-setup/skills/astro-cloudflare-workers-setup ~/.claude/skills/
 ```
 
-Restart Claude Code. A manual copy never updates itself, so re-copy it to update. **Don't install it both ways**: the plugin and a manual copy would load the same skill twice.
+Restart Claude Code. This copies only the setup skill; the passkey skill (*Making a site private*) needs the plugin. To get both skills, skip the `cp` line above (remove an earlier copy first) and run `cp -R astro-cloudflare-workers-setup ~/.claude/skills/` instead; Claude Code loads that folder as a plugin. A manual copy never updates itself, so re-copy it to update. **Don't install it both ways**: the plugin and a manual skill copy would load the same skill twice (a whole-repo copy is simply ignored while the plugin is installed).
 
 ## Using it
 
 In Claude Code, just say what you want, for example *"set up a new Astro website on Cloudflare."* The skill triggers automatically. You can also invoke it directly with `/astro-cloudflare-workers-setup` (or the full plugin form `/astro-cloudflare-workers-setup:astro-cloudflare-workers-setup` if another command already uses the short name). It guides the whole process phase by phase and asks you only for what it genuinely needs.
+
+## What's new in 3.0
+
+- **Re-checked against today's tools** (November 2026): Astro 7.4, `@astrojs/cloudflare` 14.4, `wrangler` 4.157, Node 26 LTS and Claude Code 2.1.318.
+- **Node 26 LTS** is now the version new sites use; the minimum is 22.23.4, because Astro refuses to start on anything older.
+- **TypeScript stays on version 6.** TypeScript 7 breaks the type check that runs before every build, so the skill installs 6 and Dependabot skips the 7 upgrade.
+- **Pull-request previews build reliably**: new sites get the `previews` block that Cloudflare's preview command needs.
+- A new troubleshooting entry for a page you later switch to server rendering that shows the 404 page when you open it in a browser.
+- The caching rule for Astro's files is now described correctly (the shipped `_headers` rule is the one in effect).
+- Dashboard labels, domain registration and domain transfer steps refreshed.
+- Passkey skill: `npm test` works on every supported Node version, the invite, list and revoke scripts no longer need TypeScript, and its design document now matches the shipped code.
+- `verify_site.py` stops with a clear message when nothing is deployed at the URL, and no longer mistakes Cloudflare's own error page for your custom 404.
+- The move to adapter 15 and Cloudflare's new `cf` tool is documented for later; both are still in beta, so the skill stays on adapter 14 and `wrangler`.
+
+**This is a breaking release.** It needs Astro ≥ 7.4 and `@astrojs/cloudflare` ≥ 14.4, and new sites pin Node 26.
 
 ## What's new in 2.1
 
@@ -100,7 +121,7 @@ Say "make my site private" or "add passkey login" in a site this plugin built. T
 
 ## Notes
 
-- Verified against Astro 7.3, `@astrojs/cloudflare` 14.3, `wrangler` 4.141 and Node 24 LTS (September 2026). The skill checks for version drift and adapts.
+- Verified against Astro 7.4, `@astrojs/cloudflare` 14.4, `wrangler` 4.157 and Node 26 LTS (November 2026). The skill checks for version drift and adapts.
 - It targets *static* sites on Cloudflare *Workers* (not Pages). Individual pages can opt into server rendering later.
 - No secrets are stored in your repo or on GitHub.
   - Local deploys use `wrangler login`, or `CLOUDFLARE_API_TOKEN` if you have it set.

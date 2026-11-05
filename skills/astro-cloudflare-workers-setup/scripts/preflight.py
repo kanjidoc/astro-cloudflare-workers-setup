@@ -28,14 +28,14 @@ import re
 import subprocess
 import sys
 
-# Node.js floors, compared as (major, minor, patch) tuples -- never major alone.
-# Astro's bin/astro.mjs refuses to start below 22.12.0 (engines ">=22.12.0").
-# Some of Astro's transitive dependencies (e.g. undici) declare >=22.19.0, so
-# 22.12-22.18 works but prints npm EBADENGINE warnings on every install; that is
-# a WARN, not a FAIL. Node 24 LTS is the recommended version.
-MIN_NODE = (22, 12, 0)
-CLEAN_NODE = (22, 19, 0)
-RECOMMENDED_NODE_MAJOR = 24
+# Node.js floor, compared as (major, minor, patch) tuples -- never major alone.
+# Astro's bin/astro.mjs refuses to start below 22.23.4 (engines ">=22.23.4",
+# raised in astro 7.4.2 for the Oct 2026 Node security releases), so anything
+# older is a hard FAIL. Every transitive floor (e.g. undici's >=22.19.0) sits
+# below it, so there is no "works with warnings" band. Node 26 LTS is the
+# recommended version.
+MIN_NODE = (22, 23, 4)
+RECOMMENDED_NODE_MAJOR = 26
 
 # The setup's other scripts (verify_site.py) need Python 3.9+.
 MIN_PYTHON = (3, 9)
@@ -145,13 +145,14 @@ def install_hint(tool):
     """Return an OS-specific install instruction for a given tool name."""
     hints = {
         "node": {
-            "Darwin": "Install Node 24 LTS: `nvm install 24`, or "
-                      "`brew install node@24` (then add it to PATH as brew "
-                      "prints).",
-            "Linux": "Install Node 24 LTS: `nvm install 24` (distro packages "
-                     "are often outdated), or see nodejs.org.",
-            "Windows": "Use WSL2, then install Node 24 LTS inside it: "
-                       "`nvm install 24`.",
+            "Darwin": f"Install Node {RECOMMENDED_NODE_MAJOR} LTS: "
+                      f"`nvm install {RECOMMENDED_NODE_MAJOR}`, or "
+                      "`brew install node`.",
+            "Linux": f"Install Node {RECOMMENDED_NODE_MAJOR} LTS: "
+                     f"`nvm install {RECOMMENDED_NODE_MAJOR}` (distro packages "
+                     "are often older).",
+            "Windows": f"Use WSL2, then install Node {RECOMMENDED_NODE_MAJOR} "
+                       f"LTS inside it: `nvm install {RECOMMENDED_NODE_MAJOR}`.",
         },
         "git": {
             "Darwin": "Install with `brew install git`, or from git-scm.com.",
@@ -212,12 +213,12 @@ class Report:
 # --------------------------------------------------------------------------
 
 def _fmt_version(parts):
-    """Format a version tuple as dotted text, e.g. (22, 12, 0) -> '22.12.0'."""
+    """Format a version tuple as dotted text, e.g. (22, 23, 4) -> '22.23.4'."""
     return ".".join(str(p) for p in parts)
 
 
 def parse_version(text):
-    """Return (major, minor, patch) from text like 'v22.16.0', or None.
+    """Return (major, minor, patch) from text like 'v26.10.0', or None.
 
     Missing minor/patch components count as 0, so 'v24' parses as (24, 0, 0).
     """
@@ -258,8 +259,9 @@ def check_platform(report):
 def check_node(report):
     """Verify Node.js is installed and new enough for Astro.
 
-    FAIL below 22.12.0 (Astro refuses to start), WARN below 22.19.0 (works,
-    with npm EBADENGINE warnings), otherwise OK.
+    FAIL below 22.23.4 (Astro's bin/astro.mjs refuses to start). WARN on an
+    odd-numbered major: it runs, but odd releases are never LTS and go
+    end-of-life within months -- a fact printed, not a gate. Otherwise OK.
     """
     ok, output = run_command(["node", "--version"])
     if not ok:
@@ -268,7 +270,7 @@ def check_node(report):
         report.record("FAIL")
         return
 
-    version = output.strip()  # e.g. "v22.16.0"
+    version = output.strip()  # e.g. "v26.10.0"
     parsed = parse_version(version)
     if parsed is None:
         # node ran but produced something unparseable -- treat as a hard fail
@@ -287,11 +289,11 @@ def check_node(report):
         report.record("FAIL")
         return
 
-    if parsed < CLEAN_NODE:
+    if parsed[0] % 2 == 1:
         print_line(
             "WARN", "node",
-            f"{version} (works, but npm prints EBADENGINE warnings below "
-            f"{_fmt_version(CLEAN_NODE)})",
+            f"{version} -- v{parsed[0]}.x: odd-numbered Node releases are never "
+            f"LTS and reach end-of-life within about eight months; use {RECOMMENDED_NODE_MAJOR} LTS",
         )
         print_remediation(install_hint("node"))
         report.record("WARN")

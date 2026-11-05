@@ -1,4 +1,4 @@
-// Stateless WebAuthn challenge: a signed, expiring cookie instead of a KV write (technical spec §4, §5.1).
+// Stateless WebAuthn challenge: a signed, expiring cookie instead of a KV write (technical design §4, §5.1).
 import type { User } from '../../data/auth.ts';
 import { hmacSign, hmacVerify } from './crypto.ts';
 import { b64url, utf8 } from './encoding.ts';

@@ -1,4 +1,4 @@
-// Client state machine shared by the lock screen and the invite screen (technical spec §6.1).
+// Client state machine shared by the lock screen and the invite screen (technical design §6.1).
 // createAuthFlow() is pure: every browser API arrives as a dependency, so node:test can drive it.
 // mountAuthFlow() wires it to the page.
 import {
@@ -54,7 +54,7 @@ export interface AuthFlow {
   refresh: () => void;
 }
 
-/** A dismissed or timed-out prompt. The contract treats both as a silent cancel. */
+/** A dismissed or timed-out prompt. Both are a silent cancel (technical design §6.1). */
 export function isCancel(err: unknown): boolean {
   const e = err as { code?: unknown; name?: unknown } | null;
   return (
