@@ -20,7 +20,7 @@ When this skill is invoked, **Claude opens by orienting the user** — in the ch
 1. **What this builds:** "I'll build you a real website with Astro and put it online with Cloudflare — fast, served worldwide, and free to host. Once it's set up, whenever you publish a change (I'll handle the `git push`), it goes live on its own within a couple of minutes. You can connect your own domain name too." (Save the jargon — "edge", "CI/CD", "SSR" — for if the user asks.)
 2. **Four phases get you to a live site (A–D), then there's optional ongoing maintenance.** The user can stop between phases and resume later.
 3. **The user will do a few things personally.** Claude runs every command and edits every file, but can't click in a browser — so at a handful of points (possibly a login, the Cloudflare dashboard, optionally buying a domain) **Claude will stop, say exactly what to click, and wait**. Say this up front so the first hand-off isn't a surprise.
-4. **What it needs:** a GitHub account and a Cloudflare account (both free); a custom domain is optional and costs money (≈ $10/yr).
+4. **What it needs:** a GitHub account and a Cloudflare account (both free); a custom domain is optional and costs money (≈ 10 USD/yr).
 5. **Progress is tracked:** Claude keeps a visible checklist (the session's task list, else a short numbered list in chat), one item per step, showing what's done and what's left.
 
 ### The two roles
@@ -318,7 +318,7 @@ Tell the user: "Phase C — making it production-grade: domain, auto-deploy, con
 
 Optional — the site already works on `*.workers.dev`. A custom domain must become an **active zone in the user's Cloudflare account**; `<domain>` is always the full hostname they chose (e.g. `example.dev`). Three cases:
 
-**Case 1 — no domain yet → buy one on Cloudflare Registrar.** 👤 USER ACTION. Claude first **confirms the exact name in writing** (a typo is bought and paid for) and states it costs ≈ $10/yr, **auto-renews**, and needs a card. Easiest: `Workers & Pages → <worker> → Domains` → purchase (registers and attaches at once); else `Domain Registration → Register domains` → Search → Purchase. It needs a verified account email; afterwards verify the ICANN registrant email, or the domain is parked. It's an active zone at once, with Cloudflare DNS — no nameserver change, no 100117 conflict.
+**Case 1 — no domain yet → buy one on Cloudflare Registrar.** 👤 USER ACTION. Claude first **confirms the exact name in writing** (a typo is bought and paid for) and states it costs ≈ 10 USD/yr, **auto-renews**, and needs a card. Easiest: `Workers & Pages → <worker> → Domains` → purchase (registers and attaches at once); else `Domain Registration → Register domains` → Search → Purchase. It needs a verified account email; afterwards verify the ICANN registrant email, or the domain is parked. It's an active zone at once, with Cloudflare DNS — no nameserver change, no 100117 conflict.
 
 **Case 2 — domain owned elsewhere → bring it to Cloudflare.** 👤 USER ACTION: `Domains → Onboard a domain`, then point the registrar's nameservers at Cloudflare's. Optional transfer once the zone is **Active**: `Transfer domains` with the auth/EPP code (up to 10 days; domain ≥60 days old, not moved in the last 60).
 
